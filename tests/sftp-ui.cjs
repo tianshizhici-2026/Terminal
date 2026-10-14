@@ -47,6 +47,22 @@ const path = require('node:path');
       await expect(page.locator('#status')).toHaveText('test@127.0.0.1');
     };
     await connect('first');
+    // Fractional rows must not add variable blank space below the terminal grid.
+    for (const font of [28,14]) {
+      await page.evaluate(() => window.terminalAction('settings'));
+      if (font === 28) for (let i=0;i<14;i++) await page.locator('#font-plus').click();
+      else await page.locator('#font-reset').click();
+      await page.locator('[data-close="settings-dialog"]').click();
+      for (const size of [{width:1920,height:1030},{width:1280,height:740},{width:1536,height:815},{width:1100,height:700}]) {
+        await page.setViewportSize(size);
+        await expect(page.locator('.xterm-viewport')).toHaveCSS('background-color','rgb(45, 47, 52)');
+        await expect.poll(() => page.evaluate(() => {
+          const area=document.getElementById('terminals').getBoundingClientRect();
+          const grid=document.querySelector('.xterm-screen').getBoundingClientRect();
+          return Math.abs(area.bottom-grid.bottom)<1 && grid.top>=area.top+11;
+        })).toBe(true);
+      }
+    }
     await page.evaluate(() => window.terminalAction('files'));
     const resizer = page.locator('#sftp-resizer');
     const grip = await resizer.boundingBox();

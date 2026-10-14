@@ -32,3 +32,10 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 #sftp-resizer{position:absolute;inset:0 0 0 auto;width:8px;cursor:col-resize;touch-action:none;z-index:10}
 #sftp-resizer:hover,#sftp-resizer:focus-visible,.sftp-resizing #sftp-resizer{background:#b4d8c155;outline:none;border-right:2px solid var(--accent)}
 .sftp-resizing,.sftp-resizing *{cursor:col-resize!important;user-select:none!important}
+
+/* The viewport extends past the final whole terminal row after resizing. */
+.xterm .xterm-viewport{background-color:var(--terminal)}
+
+/* Fit against the real content box; put fractional-row space above the grid. */
+.terminal-pane{inset:12px 12px 0;padding:0;display:flex;align-items:flex-end;overflow:hidden}
+.terminal-pane>.xterm{height:auto;width:100%;flex:none}
