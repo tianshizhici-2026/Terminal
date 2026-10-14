@@ -26,7 +26,8 @@ const path = require('node:path');
         postMessage:m => {
           testBridge.calls.push(m);
           const reply = result => queueMicrotask(() => testBridge.emit({request:m.request,ok:true,result}));
-          if (m.action === 'load') reply({profiles:[],fontSize:14});
+          if (m.action === 'load') reply({profiles:[],fontSize:14,sftpWidth:Number(sessionStorage.getItem('sftpWidth') || 440)});
+          else if (m.action === 'save') { sessionStorage.setItem('sftpWidth',m.sftpWidth); reply(null); }
           else if (m.action === 'sftp' && m.op === 'list') reply({path:'/home/test',entries:[{name:'sample.bin',path:'/home/test/sample.bin',size:1048576,directory:false},{name:'folder',path:'/home/test/folder',directory:true}]});
           else if (m.action === 'sftp' && m.op === 'download') { testBridge.download=m; testBridge.emit({type:'transfer',id:m.id,done:262144,total:1048576}); }
           else if (m.action === 'pauseDownload') { reply(null); testBridge.emit({request:testBridge.download.request,ok:true,result:{paused:true}}); }
@@ -47,6 +48,24 @@ const path = require('node:path');
     };
     await connect('first');
     await page.evaluate(() => window.terminalAction('files'));
+    const resizer = page.locator('#sftp-resizer');
+    const grip = await resizer.boundingBox();
+    await page.mouse.move(grip.x+4,grip.y+100); await page.mouse.down();
+    await page.mouse.move(grip.x+124,grip.y+100); await page.mouse.up();
+    await expect(resizer).toHaveAttribute('aria-valuenow','560');
+    expect(await page.evaluate(() => Number(sessionStorage.getItem('sftpWidth')))).toBe(560);
+    await page.setViewportSize({width:760,height:700});
+    await expect(resizer).toHaveAttribute('aria-valuenow','440');
+    await page.setViewportSize({width:1100,height:700});
+    await expect(resizer).toHaveAttribute('aria-valuenow','560');
+    await resizer.focus(); await page.keyboard.press('Home');
+    await expect(resizer).toHaveAttribute('aria-valuenow','300');
+    await page.keyboard.press('End');
+    await expect(resizer).toHaveAttribute('aria-valuenow','780');
+    await resizer.dblclick();
+    await expect(resizer).toHaveAttribute('aria-valuenow','440');
+    await page.keyboard.press('Shift+ArrowRight');
+    await expect(resizer).toHaveAttribute('aria-valuenow','480');
     const file = page.locator('.file-row').filter({hasText:'sample.bin'});
     await file.click({button:'right'});
     await expect(page.locator('#file-menu')).toBeVisible();
@@ -79,7 +98,11 @@ const path = require('node:path');
     await expect(page.locator('#file-menu [role=menuitem]').first()).toHaveText('打开文件夹');
     await page.locator('#files-close').click();
     await expect(page.locator('#file-menu')).toBeHidden();
+    await page.reload();
+    await page.evaluate(() => window.terminalAction('files'));
+    await expect(page.locator('#sftp-resizer')).toHaveAttribute('aria-valuenow','480');
     expect(errors).toEqual([]);
+    console.log('PASS SFTP drag, limits, viewport recovery, keyboard resize, reset and persisted width');
     console.log('PASS SFTP right-click/menu dismissal, pause/resume, long transfer, per-session status and directory actions');
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode=1; });

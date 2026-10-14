@@ -63,7 +63,7 @@ internal sealed class SettingsStore(string path)
             if (cipher.Length > 0) profile["passwordCipher"] = cipher;
             profiles.Add(profile);
         }
-        var settings = new JsonObject { ["fontSize"] = Math.Clamp(request["fontSize"]?.GetValue<int>() ?? 14, 10, 28), ["defaultShell"] = Text(request,"defaultShell") == "cmd" ? "cmd" : "powershell", ["profiles"] = profiles };
+        var settings = new JsonObject { ["fontSize"] = Math.Clamp(request["fontSize"]?.GetValue<int>() ?? 14, 10, 28), ["defaultShell"] = Text(request,"defaultShell") == "cmd" ? "cmd" : "powershell", ["profiles"] = profiles, ["sftpWidth"] = Math.Clamp(request["sftpWidth"]?.GetValue<int>() ?? 440, 300, 1200) };
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path + ".tmp", settings.ToJsonString());
         File.Move(path + ".tmp", path, true);

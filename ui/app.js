@@ -2,6 +2,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import './style.css';
+import { setupSftpResize } from './sftp-resize';
 
 const $ = id => document.getElementById(id);
 const bridge = window.chrome?.webview;
@@ -28,7 +29,8 @@ const fileBusy = new Set();
 const current = () => sessions.get(activeId);
 const theme = { background:'#2d2f34', foreground:'#edf0f5', cursor:'#d1f0da', cursorAccent:'#2d2f34', selectionBackground:'#445a78', selectionForeground:'#ffffff', selectionInactiveBackground:'#414c5e', black:'#737d8c', red:'#ff7885', green:'#82db70', yellow:'#f5ca57', blue:'#75adff', magenta:'#d18cff', cyan:'#4dd9df', white:'#e0e6ef', brightBlack:'#a5afbf', brightRed:'#ffa0a9', brightGreen:'#adf299', brightYellow:'#ffe293', brightBlue:'#a6caff', brightMagenta:'#e5b5ff', brightCyan:'#96f0ee', brightWhite:'#ffffff' };
 const decorations = {matchBackground:'#665320', matchBorder:'#e3bc51', matchOverviewRuler:'#e3bc51', activeMatchBackground:'#3f6652', activeMatchBorder:'#c7f0d4', activeMatchColorOverviewRuler:'#c7f0d4'};
-function save(credential) { return call('save', {fontSize, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
+const sftpSize = setupSftpResize($('files'), () => save().catch(report));
+function save(credential) { return call('save', {fontSize, sftpWidth:sftpSize.width, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
 function updateStatus() {
   const s = current();
   $('status').textContent = s ? (s.state === 'connected' ? (s.kind === 'ssh' ? `${s.connection.username}@${s.connection.host}` : '本地 · ' + s.name) : s.state === 'connecting' ? '正在连接…' : '会话已结束') : '未连接';
@@ -329,7 +331,8 @@ window.addEventListener('keydown', e => {
   else if (key === 'tab') { e.preventDefault(); const ids = [...sessions.keys()]; if (ids.length) activate(ids[(ids.indexOf(activeId)+(e.shiftKey ? ids.length-1 : 1)) % ids.length]); }
 },true);
 async function init() {
-  try { const settings = await call('load'); profiles = Array.isArray(settings.profiles) ? settings.profiles : []; fontSize = Math.max(10,Math.min(28,settings.fontSize || 14)); $('font-size').textContent = fontSize; $('shell').value = settings.defaultShell === 'cmd' ? 'cmd' : 'powershell'; renderProfiles(); renderTabs(); }
+  sftpSize.load();
+  try { const settings = await call('load'); sftpSize.load(settings.sftpWidth); profiles = Array.isArray(settings.profiles) ? settings.profiles : []; fontSize = Math.max(10,Math.min(28,settings.fontSize || 14)); $('font-size').textContent = fontSize; $('shell').value = settings.defaultShell === 'cmd' ? 'cmd' : 'powershell'; renderProfiles(); renderTabs(); }
   catch (e) { report(e); renderProfiles(); }
 }
 init();

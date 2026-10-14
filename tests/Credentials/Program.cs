@@ -17,6 +17,9 @@ try {
  Check(new SettingsStore(path).GetPassword("test")==secret,"DPAPI decrypts after reloading store");
  var ui=store.LoadForUi();Check(!ui.ToJsonString().Contains("passwordCipher")&&!ui.ToJsonString().Contains(secret)&&ui["profiles"]![0]!["rememberPassword"]!.GetValue<bool>(),"profile listing exposes only saved flag");
  Save(Request(null));Check(store.GetPassword("test")==secret,"ordinary settings save preserves encrypted password");
+ var sized=Request(null);sized["sftpWidth"]=680;Save(sized);
+ Check(new SettingsStore(path).LoadForUi()["sftpWidth"]!.GetValue<int>()==680&&store.GetPassword("test")==secret,"SFTP width persists without changing saved password");
+ sized["sftpWidth"]=9999;Save(sized);Check(store.LoadForUi()["sftpWidth"]!.GetValue<int>()==1200,"SFTP width is bounded");
  Save(Request(true,"replacement"));Check(store.GetPassword("test")=="replacement","password replacement persists");
  Save(Request(false));Check(store.GetPassword("test")==""&&!File.ReadAllText(path).Contains("passwordCipher"),"unchecking removes saved password");
  Save(Request(true));Save(Request(null,host:"other.example"));Check(store.GetPassword("test")=="","host change cannot inherit password");

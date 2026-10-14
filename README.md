@@ -4,7 +4,9 @@
 
 ![Terminal](src/Mist.Terminal/Assets/terminal.png)
 
-## 1.3.0 新增功能
+## 1.3.1 新增功能
+
+界面文字放大 50%，SFTP 文字为最初的 2.25 倍。文件面板位于左侧，拖动右侧分隔线调整宽度并自动保存；双击恢复默认，也可聚焦分隔线后用方向键微调。命令行保留用户设置的字号。
 
 当前新增 SFTP 右键菜单与下载断点续传：文件上右键选择“下载 / 续传”，传输中可暂停；同一会话点击“继续”，断线或应用重启后重新连接并选择原保存位置即可恢复。
 
@@ -14,10 +16,10 @@
 
 ## 下载与运行
 
-从 [Releases](https://github.com/tianshizhici-2026/Terminal/releases/latest) 下载最终版 **1.3.0**：
+从 [Releases](https://github.com/tianshizhici-2026/Terminal/releases/latest) 下载最终版 **1.3.1**：
 
-- `Terminal-1.3.0-win-x64.zip`：便携版，包含 .NET 运行时。
-- `Terminal-1.3.0-lite-win-x64.zip`：轻量版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)。
+- `Terminal-1.3.1-win-x64.zip`：便携版，包含 .NET 运行时。
+- `Terminal-1.3.1-lite-win-x64.zip`：轻量版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)。
 
 解压整个目录后运行 `Terminal.exe`。两种版本都需要 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)，Windows 11 通常已安装。应用复用系统 WebView2，不另行打包 Chromium。当前发行版未进行代码签名。
 
