@@ -1,6 +1,6 @@
 # Terminal
 
-面向 Windows 11 x64 的极简终端，以 Linux SSH 服务器连接为主要场景。深灰界面、JetBrains Mono 字体、自定义标题栏。
+面向 Windows 11 x64 的极简终端。
 
 ![Terminal](src/Mist.Terminal/Assets/terminal.png)
 
