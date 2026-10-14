@@ -1,0 +1,78 @@
+using Mist.Terminal;
+using Renci.SshNet;
+using System.Security.Cryptography;
+
+string folder = Path.Combine(Path.GetTempPath(), "terminal-transfer-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(folder);
+string remotePath = "/resume-" + Guid.NewGuid().ToString("N") + ".bin";
+byte[] payload = RandomNumberGenerator.GetBytes(4 * 1024 * 1024);
+const string identity = "fixture-host|22992|mist-test|trusted-fingerprint";
+SftpClient Connect() { var c = new SftpClient("127.0.0.1", 22992, "mist-test", "test-only"); c.Connect(); return c; }
+void Check(bool condition, string message) { if (!condition) throw new Exception(message); }
+void Reject(Action action, string message) { try { action(); } catch (IOException) { Console.WriteLine("PASS " + message); return; } throw new Exception(message); }
+void Pause(SftpClient client, string target)
+{
+    using var cancel = new CancellationTokenSource();
+    try { ResumableDownload.Run(client, identity, remotePath, target, (done, _) => { if (done > 0) cancel.Cancel(); }, cancel.Token); }
+    catch (OperationCanceledException) { return; }
+    throw new Exception("Pause was ignored");
+}
+using var source = Connect();
+try
+{
+    using (var upload = new MemoryStream(payload)) source.UploadFile(upload, remotePath);
+    string target = Path.Combine(folder, "result.bin");
+    File.WriteAllText(target, "original destination");
+    Pause(source, target);
+    long offset = new FileInfo(target + ".terminal.part").Length;
+    Check(offset > 0 && offset < payload.Length, "Partial length invalid");
+    Check(File.ReadAllText(target) == "original destination", "Pause overwrote destination");
+    Check(File.Exists(target + ".terminal.part.json"), "Checkpoint missing");
+    Console.WriteLine("PASS pause preserves checkpoint and existing destination");
+
+    Reject(() => ResumableDownload.Run(source, "another-server", remotePath, target, (_, _) => {}), "reject a different server identity");
+    using (var gate = new FileStream(target + ".terminal.part.lock", FileMode.OpenOrCreate, FileAccess.Write, FileShare.None))
+        Reject(() => ResumableDownload.Run(source, identity, remotePath, target, (_, _) => {}), "reject concurrent destination writers");
+    using (var reconnected = Connect())
+    {
+        long resumed = -1;
+        ResumableDownload.Run(reconnected, identity, remotePath, target, (done, _) => { if (resumed < 0) resumed = done; });
+        Check(resumed == offset, "Did not resume at the saved offset");
+    }
+    Check(payload.SequenceEqual(File.ReadAllBytes(target)), "Resumed bytes differ");
+    Check(!File.Exists(target + ".terminal.part") && !File.Exists(target + ".terminal.part.json"), "Completed checkpoint not cleaned");
+    Console.WriteLine("PASS new SFTP connection resumes exact offset and produces byte-identical 4 MiB file");
+
+    string dropped = Path.Combine(folder, "dropped.bin");
+    using (var broken = Connect())
+    {
+        try { ResumableDownload.Run(broken, identity, remotePath, dropped, (done, _) => { if (done > 0) broken.Disconnect(); }); }
+        catch (Exception ex) when (ex is Renci.SshNet.Common.SshException or IOException or ObjectDisposedException) { }
+    }
+    Check(File.Exists(dropped + ".terminal.part"), "Disconnect lost progress");
+    using (var reconnected = Connect()) ResumableDownload.Run(reconnected, identity, remotePath, dropped, (_, _) => {});
+    Check(payload.SequenceEqual(File.ReadAllBytes(dropped)), "Reconnect bytes differ");
+    Console.WriteLine("PASS disconnected transfer resumes after reconnect");
+
+    string changed = Path.Combine(folder, "changed.bin");
+    Pause(source, changed);
+    using (var replacement = new MemoryStream(new byte[] {1,2,3})) source.UploadFile(replacement, remotePath);
+    Reject(() => ResumableDownload.Run(source, identity, remotePath, changed, (_, _) => {}), "reject changed remote file without replacing destination");
+    Check(!File.Exists(changed), "Changed source was promoted to final file");
+
+    string orphan = Path.Combine(folder, "orphan.bin");
+    File.WriteAllText(orphan + ".terminal.part", "unrelated data");
+    Reject(() => ResumableDownload.Run(source, identity, remotePath, orphan, (_, _) => {}), "reject unrecognized partial file");
+
+    using (var empty = new MemoryStream()) source.UploadFile(empty, remotePath);
+    string emptyTarget = Path.Combine(folder, "empty.bin");
+    ResumableDownload.Run(source, identity, remotePath, emptyTarget, (_, _) => {});
+    Check(new FileInfo(emptyTarget).Length == 0, "Empty file failed");
+    Console.WriteLine("PASS empty file completion");
+}
+finally
+{
+    if (source.IsConnected && source.Exists(remotePath)) source.DeleteFile(remotePath);
+    // This directory is uniquely created by this test and never contains user files.
+    Directory.Delete(folder, true);
+}

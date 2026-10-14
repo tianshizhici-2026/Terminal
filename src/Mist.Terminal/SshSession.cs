@@ -13,8 +13,12 @@ internal sealed class SshSession : ITerminalSession
     private bool disposed;
     public readonly SemaphoreSlim FileLock = new(1, 1);
     public SftpClient Files => sftp;
+    private string fingerprint = "";
+    private readonly string endpoint;
+    public string FileIdentity => endpoint + "|" + fingerprint;
     public SshSession(string host, int port, string username, string password, string keyPath, string passphrase, Func<string, bool> verify)
     {
+        endpoint = System.Text.Json.JsonSerializer.Serialize(new { host = host.ToLowerInvariant(), port, username });
         ConnectionInfo Info()
         {
             AuthenticationMethod method;
@@ -28,7 +32,7 @@ internal sealed class SshSession : ITerminalSession
         }
         ssh = new SshClient(Info()); sftp = new SftpClient(Info());
         ssh.HostKeyReceived += (_, e) => e.CanTrust = verify(e.FingerPrintSHA256);
-        sftp.HostKeyReceived += (_, e) => e.CanTrust = verify(e.FingerPrintSHA256);
+        sftp.HostKeyReceived += (_, e) => { e.CanTrust = verify(e.FingerPrintSHA256); if (e.CanTrust) fingerprint = e.FingerPrintSHA256; };
         ssh.KeepAliveInterval = TimeSpan.FromSeconds(30);
         sftp.OperationTimeout = TimeSpan.FromSeconds(30);
     }

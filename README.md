@@ -4,12 +4,20 @@
 
 ![Terminal](src/Mist.Terminal/Assets/terminal.png)
 
+## 1.3.0 新增功能
+
+当前新增 SFTP 右键菜单与下载断点续传：文件上右键选择“下载 / 续传”，传输中可暂停；同一会话点击“继续”，断线或应用重启后重新连接并选择原保存位置即可恢复。
+
+未完成下载保存在目标旁的 `.terminal.part` 和 `.terminal.part.json`，请保留且不要编辑。完成后才替换目标文件并清理临时文件。续传核对服务器身份、远程路径、大小和修改时间；若来源变化，另选保存位置重新下载。上传续传尚未实现。
+
+后续功能在本地累计，仅在用户明确要求时统一推送发布。参见 [更新记录](CHANGELOG.md) 和 [开发计划](docs/development.md)。
+
 ## 下载与运行
 
-从 [Releases](https://github.com/tianshizhici-2026/Terminal/releases/latest) 下载最终版 **1.2.3**：
+从 [Releases](https://github.com/tianshizhici-2026/Terminal/releases/latest) 下载最终版 **1.3.0**：
 
-- `Terminal-1.2.3-win-x64.zip`：便携版，包含 .NET 运行时。
-- `Terminal-1.2.3-lite-win-x64.zip`：轻量版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)。
+- `Terminal-1.3.0-win-x64.zip`：便携版，包含 .NET 运行时。
+- `Terminal-1.3.0-lite-win-x64.zip`：轻量版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)。
 
 解压整个目录后运行 `Terminal.exe`。两种版本都需要 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)，Windows 11 通常已安装。应用复用系统 WebView2，不另行打包 Chromium。当前发行版未进行代码签名。
 
@@ -74,9 +82,12 @@ npm start
 npm run test:credentials
 npm run test:window
 npm run test:dialogs
+npm run test:sftp-ui
 ```
 
 SSH / SFTP 集成测试：安装 Python 包 `paramiko`，运行 `python tests/ssh_fixture.py`，再在另一个终端执行 `npm run test:backend`。测试服务器只监听 `127.0.0.1:22992`，使用测试凭据和临时目录。测试涵盖 ConPTY 读写/缩放/退出、SSH 交互、主机指纹拒绝，以及 128 KiB SFTP 文件的逐字节往返一致性。
+
+启动上述 SSH 测试服务器后，运行 `npm run test:transfers` 验证暂停、重连续传、来源变化拒绝、并发目标保护和逐字节一致性。`test:sftp-ui` 使用隔离的无头 Edge 与模拟消息桥验证菜单和状态，不连接真实服务器。
 
 桌面界面测试需要专用实例：先构建程序，将 `TERMINAL_DATA_DIR` 环境变量设置为独立测试目录，将 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 设置为 `--remote-debugging-port=9224`，再启动构建目录中的 `Terminal.exe`。
 

@@ -11,7 +11,8 @@ function call(action, args = {}) {
   if (!bridge) return Promise.reject(new Error('请在 Terminal 桌面应用中打开。'));
   const request = String(++sequence);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { pending.delete(request); reject(new Error('操作超时，请检查连接状态。')); }, 300000);
+    const transfer = action === 'sftp' && ['download','upload'].includes(args.op);
+    const timer = transfer ? null : setTimeout(() => { pending.delete(request); reject(new Error('操作超时，请检查连接状态。')); }, 300000);
     pending.set(request, {resolve, reject, timer});
     bridge.postMessage({action, request, ...args});
   });
@@ -22,7 +23,8 @@ function toast(message) { $('toast').textContent = message; $('toast').classList
 function report(error) { toast(error.message || String(error)); }
 window.addEventListener('unhandledrejection', e => { e.preventDefault(); report(e.reason); });
 const sessions = new Map();
-let activeId = null, profiles = [], fontSize = 14, editingProfile = null, connectionEpoch = 0, searchTimer, fileEpoch = 0, filePath = '.', fileBusy = false;
+let activeId = null, profiles = [], fontSize = 14, editingProfile = null, connectionEpoch = 0, searchTimer, fileEpoch = 0, filePath = '.';
+const fileBusy = new Set();
 const current = () => sessions.get(activeId);
 const theme = { background:'#2d2f34', foreground:'#edf0f5', cursor:'#d1f0da', cursorAccent:'#2d2f34', selectionBackground:'#445a78', selectionForeground:'#ffffff', selectionInactiveBackground:'#414c5e', black:'#737d8c', red:'#ff7885', green:'#82db70', yellow:'#f5ca57', blue:'#75adff', magenta:'#d18cff', cyan:'#4dd9df', white:'#e0e6ef', brightBlack:'#a5afbf', brightRed:'#ffa0a9', brightGreen:'#adf299', brightYellow:'#ffe293', brightBlue:'#a6caff', brightMagenta:'#e5b5ff', brightCyan:'#96f0ee', brightWhite:'#ffffff' };
 const decorations = {matchBackground:'#665320', matchBorder:'#e3bc51', matchOverviewRuler:'#e3bc51', activeMatchBackground:'#3f6652', activeMatchBorder:'#c7f0d4', activeMatchColorOverviewRuler:'#c7f0d4'};
@@ -105,7 +107,7 @@ bridge?.addEventListener('message', ({data:m}) => {
   const s = sessions.get(m.id);
   if (m.type === 'output' && s) s.term.write(m.data, () => { if ($('search-dialog').open) { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch,180); } });
   if (m.type === 'exit' && s) { s.state = 'offline'; s.term.writeln('\r\n\x1b[90m— 会话已结束 —\x1b[0m'); notify('close',{id:s.id}); renderTabs(); if (activeId === s.id) updateFilePanel(); }
-  if (m.type === 'transfer' && activeId === m.id) $('transfer').textContent = `传输中 ${m.total ? Math.round(m.done / m.total * 100) : 100}% · ${formatSize(m.done)}`;
+  if (m.type === 'transfer' && s?.transfer) { s.transfer.done = m.done; s.transfer.total = m.total; renderTransfer(); }
   if (m.type === 'error') report(m.error);
 });
 function renderProfiles() {
@@ -204,17 +206,56 @@ $('search-input').oninput = () => { $('search-results').replaceChildren(); clear
 $('case-sensitive').onchange = runSearch;
 function formatSize(bytes) { return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes/1024).toFixed(1)} KB` : `${(bytes/1048576).toFixed(1)} MB`; }
 function updateFilePanel() {
+  $('file-menu').hidePopover();
   const s = current(), available = s?.kind === 'ssh' && s.state === 'connected';
   fileEpoch++; $('files-hint').hidden = available; $('files-content').hidden = !available;
+  renderTransfer();
   if (!$('files').hidden && available) loadFiles(s.remotePath || '.');
 }
+function renderTransfer() {
+  const s = current(), t = s?.transfer;
+  $('transfer-toggle').hidden = !t || t.op !== 'download' || !['running','pausing','paused','failed'].includes(t.state);
+  $('transfer-toggle').disabled = t?.state === 'pausing' || s?.state !== 'connected';
+  $('transfer-toggle').textContent = ['paused','failed'].includes(t?.state) ? '继续' : t?.state === 'pausing' ? '暂停中…' : '暂停';
+  if (!t) { $('transfer').textContent = s?.fileSummary || ''; return; }
+  const label = {running:'传输中',pausing:'暂停中',paused:'已暂停',failed:'已中断',completed:'已完成'}[t.state];
+  $('transfer').textContent = `${label} · ${t.name}${t.total != null ? ` · ${t.total ? Math.round(t.done/t.total*100) : 100}%` : ''}`;
+  $('transfer').title = t.error || (t.done != null ? `${formatSize(t.done)} / ${formatSize(t.total)}` : t.name);
+}
+$('transfer-toggle').onclick = async () => {
+  const s = current(), t = s?.transfer;
+  if (!t) return;
+  if (t.state === 'running') { t.state = 'pausing'; renderTransfer(); try { await call('pauseDownload',{id:s.id}); } catch(e) { report(e); } }
+  else if (['paused','failed'].includes(t.state)) fileAction('download',{path:t.path,resume:'yes'});
+};
+function openFileMenu(entry, id, row, x, y) {
+  const menu = $('file-menu'); menu.replaceChildren();
+  const add = (label, action) => {
+    const button = document.createElement('button'); button.role = 'menuitem'; button.textContent = label;
+    button.onclick = () => { menu.hidePopover(); if (activeId === id) action(); };
+    menu.append(button);
+  };
+  add(entry.directory ? '打开文件夹' : '下载 / 续传', () => entry.directory ? loadFiles(entry.path) : fileAction('download',{path:entry.path}));
+  add('重命名', async () => { const name = await askText('重命名',entry.name); if (activeId === id && name && validFileName(name)) fileAction('rename',{path:entry.path,destination:entry.path.slice(0,entry.path.lastIndexOf('/')+1)+name}); });
+  menu.showPopover();
+  const bounds = row.getBoundingClientRect();
+  menu.style.left = Math.max(6,Math.min(x ?? bounds.right-160,innerWidth-menu.offsetWidth-6))+'px';
+  menu.style.top = Math.max(6,Math.min(y ?? bounds.bottom,innerHeight-menu.offsetHeight-6))+'px';
+  menu.firstElementChild.focus();
+}
+$('file-menu').onkeydown = e => {
+  if (!['ArrowDown','ArrowUp','Home','End'].includes(e.key)) return;
+  e.preventDefault(); const buttons = [...$('file-menu').children], index = buttons.indexOf(document.activeElement);
+  buttons[e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length-1 : (index+(e.key === 'ArrowDown' ? 1 : buttons.length-1))%buttons.length]?.focus();
+};
 async function loadFiles(path) {
+  $('file-menu').hidePopover();
   const id = activeId, epoch = ++fileEpoch;
-  $('transfer').textContent = '读取目录…';
+  if (current()) current().fileSummary = '读取目录…'; renderTransfer();
   try {
     const result = await call('sftp',{id,op:'list',path});
     if (activeId !== id || epoch !== fileEpoch) return;
-    filePath = result.path; current().remotePath = filePath; $('remote-path').value = filePath; $('file-list').replaceChildren(); $('transfer').textContent = `${result.entries.length} 个项目`;
+    filePath = result.path; current().remotePath = filePath; $('remote-path').value = filePath; $('file-list').replaceChildren(); current().fileSummary = `${result.entries.length} 个项目`; renderTransfer();
     for (const entry of result.entries) {
       const row = document.createElement('div'); row.className = 'file-row';
       const open = document.createElement('button'); open.className = 'file-open'; open.title = entry.directory ? '打开目录' : '下载 ' + entry.name;
@@ -222,22 +263,34 @@ async function loadFiles(path) {
       const name = document.createElement('b'); name.textContent = entry.name; open.append(icon,name);
       open.onclick = () => entry.directory ? loadFiles(entry.path) : fileAction('download',{path:entry.path});
       const size = document.createElement('small'); size.textContent = entry.directory ? '' : formatSize(entry.size);
-      const rename = document.createElement('button'); rename.className = 'file-rename'; rename.textContent = '⋯'; rename.title = '重命名';
-      rename.onclick = async () => { const newName = await askText('重命名',entry.name); if (newName && validFileName(newName)) await fileAction('rename',{path:entry.path,destination:filePath.replace(/\/$/,'')+'/'+newName}); };
+      const rename = document.createElement('button'); rename.className = 'file-rename'; rename.textContent = '⋯'; rename.title = '文件操作'; rename.setAttribute('aria-haspopup','menu');
+      rename.onclick = () => openFileMenu(entry,id,row);
+      row.oncontextmenu = e => { e.preventDefault(); openFileMenu(entry,id,row,e.clientX,e.clientY); };
       row.append(open,size,rename); $('file-list').append(row);
     }
-  } catch (e) { if (activeId === id && epoch === fileEpoch) { $('transfer').textContent = '读取失败：' + e.message; $('file-list').replaceChildren(); } }
+  } catch (e) { if (activeId === id && epoch === fileEpoch) { current().fileSummary = '读取失败：' + e.message; renderTransfer(); $('file-list').replaceChildren(); } }
 }
 function validFileName(name) { if (!name || name === '.' || name === '..' || /[/\\\x00]/.test(name)) { toast('名称不能包含路径分隔符'); return false; } return true; }
 async function fileAction(op,args) {
-  if (fileBusy) { toast('请等待当前传输完成'); return; }
-  const id = activeId, path = filePath; fileBusy = true; $('transfer').textContent = '正在处理…';
-  try { const result = await call('sftp',{id,op,...args}); if (!result?.cancelled) toast('文件操作已完成'); if (activeId === id) await loadFiles(path); }
-  catch (e) { report(e); if (activeId === id) $('transfer').textContent = '操作失败：' + e.message; }
-  finally { fileBusy = false; }
+  const id = activeId, s = current();
+  if (!s || s.state !== 'connected') return;
+  if (fileBusy.has(id)) { toast('请等待当前传输完成'); return; }
+  const path = filePath, previous = s.transfer, isTransfer = ['download','upload'].includes(op);
+  fileBusy.add(id);
+  if (isTransfer) s.transfer = {op,path:args.path,name:args.path.split('/').at(-1),state:'running'};
+  renderTransfer();
+  try {
+    const result = await call('sftp',{id,op,...args});
+    if (result?.cancelled) s.transfer = previous;
+    else if (result?.paused) s.transfer.state = 'paused';
+    else { if (isTransfer) s.transfer.state = 'completed'; toast('文件操作已完成'); }
+    if (activeId === id && !result?.paused && !result?.cancelled && op !== 'download') await loadFiles(path);
+  }
+  catch (e) { if (isTransfer) { s.transfer.state = 'failed'; s.transfer.error = e.message; } report(e); }
+  finally { fileBusy.delete(id); renderTransfer(); }
 }
-function toggleFiles() { $('files').hidden = !$('files').hidden; updateFilePanel(); }
-$('files-close').onclick = () => { $('files').hidden = true; fileEpoch++; };
+function toggleFiles() { $('file-menu').hidePopover(); $('files').hidden = !$('files').hidden; updateFilePanel(); }
+$('files-close').onclick = () => { $('file-menu').hidePopover(); $('files').hidden = true; fileEpoch++; };
 $('path-form').onsubmit = e => { e.preventDefault(); loadFiles($('remote-path').value); };
 $('parent-dir').onclick = () => loadFiles(filePath.replace(/\/[^/]+\/?$/,'') || '/');
 $('refresh').onclick = () => loadFiles(filePath);
@@ -248,6 +301,7 @@ function confirmAction(title,message) { return new Promise(resolve => { $('confi
 document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => $(b.dataset.close).close());
 function openConnections() { $('connections-menu').togglePopover(); }
 window.terminalAction = action => {
+  $('file-menu').hidePopover();
   for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
   if (action !== 'connections') $('connections-menu').hidePopover();
   if (action === 'connections') openConnections();

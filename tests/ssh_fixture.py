@@ -2,6 +2,10 @@
 import os, socket, threading, tempfile, time, pathlib, paramiko
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix='mist-sftp-test-'))
 KEY = paramiko.RSAKey.generate(2048)
+class Handle(paramiko.SFTPHandle):
+    def stat(self):
+        try: return paramiko.SFTPAttributes.from_stat(os.fstat(self.readfile.fileno()))
+        except OSError as e: return paramiko.SFTPServer.convert_errno(e.errno)
 class Server(paramiko.ServerInterface):
     def check_auth_password(self, username, password):
         return paramiko.AUTH_SUCCESSFUL if (username,password)==('mist-test','test-only') else paramiko.AUTH_FAILED
@@ -40,7 +44,7 @@ class Files(paramiko.SFTPServerInterface):
         try:
             fd=os.open(self.local(path),flags|getattr(os,'O_BINARY',0),0o600)
             f=os.fdopen(fd,'r+b' if flags & os.O_RDWR else 'wb' if flags & os.O_WRONLY else 'rb')
-            h=paramiko.SFTPHandle(flags);h.readfile=f;h.writefile=f;return h
+            h=Handle(flags);h.readfile=f;h.writefile=f;return h
         except OSError as e:return paramiko.SFTPServer.convert_errno(e.errno)
     def mkdir(self,path,attr):
         try:self.local(path).mkdir();return paramiko.SFTP_OK

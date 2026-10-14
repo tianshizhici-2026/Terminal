@@ -12,6 +12,8 @@ public partial class MainWindow : Window
     private readonly ConcurrentDictionary<string, ITerminalSession> sessions = new();
     private readonly HashSet<string> opening = [];
     private readonly HashSet<string> cancelled = [];
+    private readonly Dictionary<string, CancellationTokenSource> downloads = new();
+    private readonly Dictionary<(string Id, string Path), string> downloadDestinations = new();
     private readonly string dataDir = Environment.GetEnvironmentVariable("TERMINAL_DATA_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Terminal");
     private bool closing;
     private static readonly JsonSerializerOptions json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -45,6 +47,7 @@ public partial class MainWindow : Window
         {
             if ((sessions.Count > 0 || opening.Count > 0) && !ConfirmWindow.Ask(this, "退出 Terminal？", "所有终端连接及正在运行的任务将结束。", "退出")) { e.Cancel = true; return; }
             closing = true;
+            foreach (var download in downloads.Values) download.Cancel();
             foreach (var session in sessions.Values) _ = Task.Run(session.Dispose);
             sessions.Clear(); Web.Dispose();
         };
@@ -121,6 +124,8 @@ public partial class MainWindow : Window
                 if (sessions.TryGetValue(id, out var resized)) resized.Resize(Math.Clamp(N(p, "cols", 80), 2, 500), Math.Clamp(N(p, "rows", 24), 2, 300));
                 return null;
             case "close":
+                if (downloads.TryGetValue(id, out var download)) download.Cancel();
+                foreach (var key in downloadDestinations.Keys.Where(x => x.Id == id).ToArray()) downloadDestinations.Remove(key);
                 if (opening.Contains(id)) cancelled.Add(id);
                 if (sessions.TryRemove(id, out var removed)) await Task.Run(removed.Dispose);
                 return null;
@@ -129,6 +134,9 @@ public partial class MainWindow : Window
             case "chooseKey":
                 var keyDialog = new OpenFileDialog { Title = "选择 SSH 私钥", Filter = "所有文件|*.*" };
                 return keyDialog.ShowDialog(this) == true ? keyDialog.FileName : null;
+            case "pauseDownload":
+                if (downloads.TryGetValue(id, out var running)) running.Cancel();
+                return null;
             case "sftp": return await FileOperation(id, p);
             default: throw new InvalidOperationException("不支持的操作");
         }
@@ -158,13 +166,23 @@ public partial class MainWindow : Window
         }
         if (op == "download")
         {
-            var dialog = new SaveFileDialog { FileName = path.Split('/').Last(), Title = "保存下载文件" };
-            if (dialog.ShowDialog(this) != true) return new { cancelled = true };
-            local = dialog.FileName;
+            if (downloads.ContainsKey(id)) throw new InvalidOperationException("当前会话已有下载任务。");
+            if (S(p, "resume") == "yes" && downloadDestinations.TryGetValue((id, path), out var saved)) local = saved;
+            else
+            {
+                var dialog = new SaveFileDialog { FileName = path.Split('/').Last(), Title = "下载 / 续传" };
+                if (dialog.ShowDialog(this) != true) return new { cancelled = true };
+                local = dialog.FileName;
+            }
+            downloadDestinations[(id, path)] = local;
         }
-        await remote.FileLock.WaitAsync();
+        using var cancellation = new CancellationTokenSource();
+        if (op == "download") downloads.Add(id, cancellation);
+        bool locked = false;
         try
         {
+            await remote.FileLock.WaitAsync(cancellation.Token);
+            locked = true;
             return await Task.Run<object?>(() =>
             {
                 var client = remote.Files;
@@ -183,14 +201,8 @@ public partial class MainWindow : Window
                 }
                 else if (op == "download")
                 {
-                    var temporary = local + ".mist-" + Guid.NewGuid().ToString("N") + ".part";
-                    try
-                    {
-                        ulong total = (ulong)client.GetAttributes(path).Size; long last = 0;
-                        using (var stream = File.Create(temporary)) client.DownloadFile(path, stream, done => { if (Environment.TickCount64 - last > 120 || done == total) { last = Environment.TickCount64; Send(new { type = "transfer", id, done, total }); } });
-                        File.Move(temporary, local, true);
-                    }
-                    finally { if (File.Exists(temporary)) File.Delete(temporary); }
+                    ResumableDownload.Run(client, remote.FileIdentity, path, local,
+                        (done, total) => Send(new { type = "transfer", id, done, total }), cancellation.Token);
                 }
                 else if (op == "mkdir") client.CreateDirectory(path);
                 else if (op == "rename") client.RenameFile(path, S(p, "destination"));
@@ -198,6 +210,11 @@ public partial class MainWindow : Window
                 return new { success = true };
             });
         }
-        finally { remote.FileLock.Release(); }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { return new { paused = true }; }
+        finally
+        {
+            if (op == "download") downloads.Remove(id);
+            if (locked) remote.FileLock.Release();
+        }
     }
 }

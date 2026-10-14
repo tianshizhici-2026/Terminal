@@ -6,13 +6,14 @@
  <main>
   <div class="workspace"><div class="tabs-row"><div id="tabs" role="tablist" aria-label="终端标签"></div><button id="tab-plus" title="新增连接 Ctrl+T">＋</button><div class="tab-status"><span id="status-dot" class="status-dot"></span><span id="status">未连接</span><span id="session-count" hidden></span></div></div>
    <div class="workspace-body"><div id="terminals"><div id="empty"><span class="empty-symbol">›_</span><button id="empty-new" class="empty-connect">连接服务器 ↗</button></div></div>
-    <aside id="files" hidden><div class="panel-title"><span>文件浏览 <small>SFTP</small></span><button id="files-close" title="关闭文件面板">×</button></div><div id="files-hint">请先连接 SSH。</div><div id="files-content" hidden><form id="path-form"><button type="button" id="parent-dir" title="上一级">↑</button><input id="remote-path" aria-label="远程路径" value="."><button title="前往">↵</button></form><div class="file-actions"><button id="upload">↑ 上传</button><button id="mkdir">＋ 文件夹</button><button id="refresh" title="刷新">↻</button></div><div id="file-list"></div><div id="transfer" aria-live="polite"></div></div></aside>
+    <aside id="files" hidden><div class="panel-title"><span>文件浏览 <small>SFTP</small></span><button id="files-close" title="关闭文件面板">×</button></div><div id="files-hint">请先连接 SSH。</div><div id="files-content" hidden><form id="path-form"><button type="button" id="parent-dir" title="上一级">↑</button><input id="remote-path" aria-label="远程路径" value="."><button title="前往">↵</button></form><div class="file-actions"><button id="upload">↑ 上传</button><button id="mkdir">＋ 文件夹</button><button id="refresh" title="刷新">↻</button></div><div id="file-list"></div><div class="transfer-row"><div id="transfer" aria-live="polite"></div><button id="transfer-toggle" hidden>暂停</button></div></div></aside>
    </div>
   </div>
 
  </main>
 </div>
 
+<div id="file-menu" popover role="menu" aria-label="文件操作"></div>
 <div id="connections-menu" popover>
  <div class="menu-heading">连接 <button id="add-profile" title="新建 SSH 连接">＋</button></div>
  <div id="profiles" class="profiles"></div>

@@ -13,3 +13,6 @@ src/Mist.Terminal/www/
 .env.*
 *.log
 __pycache__/
+*.terminal.part
+*.terminal.part.json
+*.terminal.part.lock
