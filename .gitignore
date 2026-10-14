@@ -1,0 +1,15 @@
+node_modules/
+**/bin/
+**/obj/
+dist/
+test-results/
+playwright-report/
+.vs/
+artifacts/
+src/Mist.Terminal/www/
+*.user
+*.suo
+.env
+.env.*
+*.log
+__pycache__/
