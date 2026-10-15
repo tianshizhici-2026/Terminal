@@ -15,18 +15,18 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 /* Room for the larger interface type while preserving terminal space. */
 .tabs-row{height:48px}.tab{min-width:170px;max-width:280px}#files{width:360px;max-width:48vw}#connections-menu{width:390px;max-width:calc(100vw - 24px)}.menu-heading button{width:36px}dialog{max-width:calc(100vw - 24px);overflow:auto}#connect-dialog{width:540px}#settings-dialog{width:520px}#help-dialog{width:700px}.port{width:120px}.dialog-actions{flex-wrap:wrap}.shortcut-list>div{gap:12px}.shortcut-list kbd{flex-shrink:0}.setting-row{flex-wrap:wrap}.search-toolbar{gap:12px;flex-wrap:wrap}#file-menu{width:240px}@media(max-width:800px){.tab-status{display:none}#help-dialog .shortcut-list>div{flex-wrap:wrap}}
 
-/* SFTP text: another 50% above the enlarged application interface. */
-#files{order:-1;width:440px;font-size:29.25px;border-left:0;border-right:1px solid var(--border)}
-#files .panel-title{font-size:27px}
-#files .panel-title small{font-size:20.25px}
-#files .panel-title button{font-size:45px;line-height:1}
-#files .panel-title~div{font-size:24.75px}
-#files #remote-path,#files .file-actions button,#files .file-open b,#files #transfer{font-size:22.5px}
-#files .file-row small{font-size:20.25px;white-space:nowrap;flex-shrink:0}
-#files .transfer-row button{font-size:24.75px}
+/* SFTP panel typography. */
+#files{order:-1;width:440px;font-size:23.4px;border-left:0;border-right:1px solid var(--border)}
+#files .panel-title{font-size:21.6px}
+#files .panel-title small{font-size:16.2px}
+#files .panel-title button{font-size:36px;line-height:1}
+#files .panel-title~div{font-size:19.8px}
+#files #remote-path,#files .file-actions button,#files .file-open b,#files #transfer{font-size:18px}
+#files .file-row small{font-size:16.2px;white-space:nowrap;flex-shrink:0}
+#files .transfer-row button{font-size:19.8px}
 #files .file-actions{flex-wrap:wrap}
 #file-menu{width:280px;max-width:calc(100vw - 12px)}
-#file-menu button{font-size:27px}
+#file-menu button{font-size:21.6px}
 
 #files{position:relative;max-width:none}
 #sftp-resizer{position:absolute;inset:0 0 0 auto;width:8px;cursor:col-resize;touch-action:none;z-index:10}
@@ -42,5 +42,5 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 /* Auxiliary panels and connection actions. */
 #recent-profiles{width:min(600px,90%);max-height:65%;overflow:auto;margin-top:20px;text-align:left}#empty:has(.profile) .empty-symbol{display:none}#empty{overflow:auto;padding:16px}.profile-connect{flex-shrink:0;padding:10px 12px;font-size:16px;color:var(--accent)}#delete-profile{color:#ffa0a9;margin-right:auto}.profile-main b{white-space:nowrap}#quick-auth-dialog label,#snippet-dialog label{display:flex;flex-direction:column;gap:10px;margin:12px 0}#quick-auth-title{overflow-wrap:anywhere}
 #session-menu{position:fixed;inset:auto;margin:0;width:225px;padding:6px;background:#33363d;border:1px solid #606774;border-radius:8px;color:var(--text);box-shadow:0 10px 30px #0006}#session-menu button{display:block;width:100%;padding:10px 12px;text-align:left;font-size:18px}#session-menu::backdrop{background:transparent}
-#snippets{order:1;width:320px;max-width:42vw;flex-shrink:0;min-height:0;display:flex;flex-direction:column;background:#292c30;border-left:1px solid var(--border)}#snippets .panel-title{font-size:20px}#snippets .panel-title button{font-size:28px}#snippet-add{padding:14px;font-size:17px;text-align:left;color:var(--accent)}#snippet-list{overflow:auto;flex:1;padding:8px}.snippet-row{border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden}.snippet-use{display:block;width:100%;text-align:left;padding:12px}.snippet-use b{font-size:17px;overflow-wrap:anywhere}.snippet-use pre{font:14px 'JetBrains Mono';white-space:pre-wrap;overflow-wrap:anywhere;max-height:130px;overflow:hidden;margin-bottom:0;color:var(--muted)}.snippet-actions{display:flex;justify-content:flex-end;gap:6px;border-top:1px solid var(--border);padding:5px}.snippet-actions button{font-size:14px;padding:6px 8px}.panel-empty{color:var(--muted);font-size:16px;text-align:center}#snippet-dialog{width:700px}#snippet-dialog textarea{font:16px 'JetBrains Mono';color:var(--text);background:#292b30;border:1px solid #555860;border-radius:7px;padding:10px;resize:vertical;min-height:150px;width:100%;box-sizing:border-box}#snippet-dialog label{font-size:17px}
-.file-filter{padding:8px 10px;display:flex;flex-direction:column;gap:4px}.file-filter input{font-size:18px;width:100%;padding:8px}.file-filter span{font-size:14px;color:#ffa0a9;overflow-wrap:anywhere}.file-filter input[aria-invalid=true]{border-color:#ff7885}.terminal-pane{right:16px}
+#snippets{order:1;width:320px;max-width:42vw;flex-shrink:0;min-height:0;display:flex;flex-direction:column;background:#292c30;border-left:1px solid var(--border)}#snippets .panel-title{font-size:20px}#snippets .panel-title button{font-size:28px}#snippet-add{padding:14px;font-size:17px;text-align:left;color:var(--accent)}#snippet-list{overflow:auto;flex:1;padding:8px}.snippet-row{display:flex;align-items:center;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden}.snippet-use{display:block;flex:1;min-width:0;text-align:left;padding:12px}.snippet-use pre{font:17px 'JetBrains Mono';white-space:pre-wrap;overflow-wrap:anywhere;max-height:130px;overflow:hidden;margin:0;color:var(--text)}.snippet-actions{display:flex;flex-shrink:0;padding:5px}.snippet-actions button{font-size:14px;padding:6px 8px}.panel-empty{color:var(--muted);font-size:16px;text-align:center}#snippet-dialog{width:700px}#snippet-dialog textarea{font:16px 'JetBrains Mono';color:var(--text);background:#292b30;border:1px solid #555860;border-radius:7px;padding:10px;resize:vertical;min-height:150px;width:100%;box-sizing:border-box}#snippet-dialog label{font-size:17px}
+.file-filter{padding:8px 10px;display:flex;flex-direction:column;gap:4px}.file-filter input{font-size:14.4px;width:100%;padding:8px}.file-filter span{font-size:11.2px;color:#ffa0a9;overflow-wrap:anywhere}.file-filter input[aria-invalid=true]{border-color:#ff7885}.terminal-pane{right:16px}
