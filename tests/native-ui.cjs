@@ -30,7 +30,7 @@ const assert=require('node:assert/strict');
  await expect(page.locator('#status')).toContainText('本地');
  await page.locator('.terminal-pane:not([hidden]) .xterm-helper-textarea').focus();await page.keyboard.type("Write-Output ('SECOND_'+'SESSION')");await page.keyboard.press('Enter');
  await page.waitForFunction(()=>window.testOutput.includes('SECOND_SESSION'));
- await page.keyboard.down('Shift');await page.mouse.wheel(0,-100);await page.keyboard.up('Shift');await expect(page.locator('#font-size')).toHaveText('15');
+ await page.keyboard.down('Control');await page.mouse.wheel(0,-100);await page.keyboard.up('Control');await expect(page.locator('#font-size')).toHaveText('15');
  await page.keyboard.press('Control+Tab');await expect(page.locator('.tab').first()).toHaveClass(/selected/);console.log('PASS multi-tab switch and global font adjustment');
  await page.keyboard.press('Control+k');await page.locator('#search-input').fill('SECOND_SESSION');await expect(page.locator('.search-result').first()).toBeVisible();await page.locator('.search-result').first().click();await expect(page.locator('.tab').nth(1)).toHaveClass(/selected/);console.log('PASS global search jumps across sessions and highlights');
  await page.keyboard.press('Control+0');await expect(page.locator('#font-size')).toHaveText('14');

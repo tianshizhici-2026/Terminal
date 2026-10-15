@@ -39,14 +39,15 @@ internal sealed class SettingsStore(string path)
     }
     public void Save(JsonElement input)
     {
-        var previous = Read()["profiles"]!.AsArray();
+        var previousSettings = Read();
+        var previous = previousSettings["profiles"]!.AsArray();
         var request = JsonNode.Parse(input.GetRawText())!;
         var credential = request["credential"];
         var profiles = new JsonArray();
         foreach (var item in request["profiles"]!.AsArray())
         {
             var profile = new JsonObject();
-            foreach (var key in new[] { "id", "name", "host", "port", "username", "keyPath" }) profile[key] = item![key]?.DeepClone();
+            foreach (var key in new[] { "id", "name", "host", "port", "username", "keyPath", "lastUsed" }) profile[key] = item![key]?.DeepClone();
             var old = previous.FirstOrDefault(x => Text(x, "id") == Text(profile, "id"));
             string cipher = old != null && Binding(old).SequenceEqual(Binding(profile)) ? Text(old,"passwordCipher") : "";
             if (credential != null && Text(credential, "id") == Text(profile, "id"))
@@ -64,6 +65,18 @@ internal sealed class SettingsStore(string path)
             profiles.Add(profile);
         }
         var settings = new JsonObject { ["fontSize"] = Math.Clamp(request["fontSize"]?.GetValue<int>() ?? 14, 10, 28), ["defaultShell"] = Text(request,"defaultShell") == "cmd" ? "cmd" : "powershell", ["profiles"] = profiles, ["sftpWidth"] = Math.Clamp(request["sftpWidth"]?.GetValue<int>() ?? 440, 300, 1200) };
+        string font = Text(request, "fontFamily");
+        settings["fontFamily"] = new[] { "JetBrains Mono", "Consolas", "SimHei", "FangSong" }.Contains(font) ? font : "JetBrains Mono";
+        var snippets = new JsonArray();
+        var incoming = request["snippets"] as JsonArray ?? previousSettings["snippets"] as JsonArray ?? new JsonArray();
+        if (incoming.Count > 500) throw new InvalidOperationException("最多保存 500 个代码块。");
+        foreach (var snippet in incoming)
+        {
+            string title = Text(snippet, "title"), code = Text(snippet, "code");
+            if (title.Length > 100 || code.Length > 100000) throw new InvalidOperationException("代码块标题或内容过长。");
+            snippets.Add(new JsonObject { ["id"] = Text(snippet,"id"), ["title"] = title, ["code"] = code });
+        }
+        settings["snippets"] = snippets;
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path + ".tmp", settings.ToJsonString());
         File.Move(path + ".tmp", path, true);

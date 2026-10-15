@@ -129,8 +129,8 @@ public partial class MainWindow : Window
                 if (opening.Contains(id)) cancelled.Add(id);
                 if (sessions.TryRemove(id, out var removed)) await Task.Run(removed.Dispose);
                 return null;
-            case "copy": Clipboard.SetText(S(p, "text")); return null;
-            case "paste": return Clipboard.ContainsText() ? Clipboard.GetText() : "";
+            case "copy": await ClipboardAccess.WriteAsync(new System.Windows.Interop.WindowInteropHelper(this).Handle, S(p, "text")); return null;
+            case "paste": return await ClipboardAccess.ReadAsync(new System.Windows.Interop.WindowInteropHelper(this).Handle);
             case "chooseKey":
                 var keyDialog = new OpenFileDialog { Title = "选择 SSH 私钥", Filter = "所有文件|*.*" };
                 return keyDialog.ShowDialog(this) == true ? keyDialog.FileName : null;

@@ -7,7 +7,7 @@ export function setupSftpResize(panel, onSave) {
   handle.title = '左右拖动调整宽度 · 双击恢复默认';
   panel.append(handle);
   let preferred = 440, drag = null;
-  const maximum = () => Math.max(300,Math.min(1200,panel.parentElement.clientWidth-320));
+  const maximum = () => Math.max(300,Math.min(1200,panel.parentElement.clientWidth-320-(document.getElementById('snippets')?.getBoundingClientRect().width || 0)));
   const clamp = value => Math.round(Math.max(300,Math.min(maximum(),value)));
   function render() {
     const width = clamp(preferred);
@@ -45,6 +45,7 @@ export function setupSftpResize(panel, onSave) {
     render(); onSave();
   };
   new ResizeObserver(render).observe(panel.parentElement);
+  new MutationObserver(render).observe(panel.parentElement,{subtree:true,attributes:true,attributeFilter:['hidden']});
   return {
     get width() { return preferred; },
     load(value) { preferred = Number.isFinite(value) ? Math.max(300,Math.min(1200,value)) : 440; render(); }

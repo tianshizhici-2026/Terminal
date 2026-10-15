@@ -3,6 +3,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import './style.css';
 import { setupSftpResize } from './sftp-resize';
+import { setupSnippets } from './snippets';
+import { setupFileFilter } from './file-filter';
 
 const $ = id => document.getElementById(id);
 const bridge = window.chrome?.webview;
@@ -27,10 +29,19 @@ const sessions = new Map();
 let activeId = null, profiles = [], fontSize = 14, editingProfile = null, connectionEpoch = 0, searchTimer, fileEpoch = 0, filePath = '.';
 const fileBusy = new Set();
 const current = () => sessions.get(activeId);
+const fonts = {'JetBrains Mono':'"JetBrains Mono"','Consolas':'Consolas','SimHei':'SimHei, "黑体"','FangSong':'FangSong, "仿宋"'};
+let fontFamily = 'JetBrains Mono';
 const theme = { background:'#2d2f34', foreground:'#edf0f5', cursor:'#d1f0da', cursorAccent:'#2d2f34', selectionBackground:'#445a78', selectionForeground:'#ffffff', selectionInactiveBackground:'#414c5e', black:'#737d8c', red:'#ff7885', green:'#82db70', yellow:'#f5ca57', blue:'#75adff', magenta:'#d18cff', cyan:'#4dd9df', white:'#e0e6ef', brightBlack:'#a5afbf', brightRed:'#ffa0a9', brightGreen:'#adf299', brightYellow:'#ffe293', brightBlue:'#a6caff', brightMagenta:'#e5b5ff', brightCyan:'#96f0ee', brightWhite:'#ffffff' };
 const decorations = {matchBackground:'#665320', matchBorder:'#e3bc51', matchOverviewRuler:'#e3bc51', activeMatchBackground:'#3f6652', activeMatchBorder:'#c7f0d4', activeMatchColorOverviewRuler:'#c7f0d4'};
 const sftpSize = setupSftpResize($('files'), () => save().catch(report));
-function save(credential) { return call('save', {fontSize, sftpWidth:sftpSize.width, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
+const snippets = setupSnippets({paste:text=>pasteText(current(),text),save:()=>save(),confirm:confirmAction,report});
+function save(credential) { return call('save', {fontSize, fontFamily, snippets:snippets.items, sftpWidth:sftpSize.width, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
+async function copySelection(s, quiet=false) { const text=s?.term.getSelection(); if(text){await call('copy',{text});if(!quiet)toast('已复制');} }
+function pasteText(s,text) { if(s?.state!=='connected'){toast('请先连接终端');return;} s.term.paste(text);s.term.focus(); }
+async function pasteClipboard(s) { const text=await call('paste');if(sessions.has(s.id))pasteText(s,text); }
+function focusTerminal() { if(!document.querySelector('dialog[open]') && !document.activeElement?.matches('input,textarea:not(.xterm-helper-textarea),select')) current()?.term.focus(); }
+window.addEventListener('focus',()=>requestAnimationFrame(focusTerminal));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)requestAnimationFrame(focusTerminal);});
 function updateStatus() {
   const s = current();
   $('status').textContent = s ? (s.state === 'connected' ? (s.kind === 'ssh' ? `${s.connection.username}@${s.connection.host}` : '本地 · ' + s.name) : s.state === 'connecting' ? '正在连接…' : '会话已结束') : '未连接';
@@ -46,10 +57,18 @@ function renderTabs() {
     label.onclick = () => activate(s.id); label.ondblclick = async () => { const name = await askText('重命名终端', s.name); if (name) { s.name = name.slice(0,60); renderTabs(); updateStatus(); } };
     const close = document.createElement('button'); close.className = 'tab-close'; close.textContent = '×'; close.title = '关闭 ' + s.name; close.onclick = () => closeSession(s.id);
     tab.append(dot,label,close); $('tabs').append(tab);
+    tab.oncontextmenu=e=>{e.preventDefault();showSessionMenu(s,e.clientX,e.clientY);};
   }
   $('empty').hidden = sessions.size > 0; updateStatus();
 }
-function fit(s) { if (!s || s.pane.hidden) return; try { s.fit.fit(); } catch {} }
+function fit(s) {
+  if (!s || s.pane.hidden) return;
+  try {
+    const dimensions=s.fit.proposeDimensions();
+    // Keep a full spare cell for glyph overhang and scrollbar rounding at fractional DPI.
+    if(dimensions) s.term.resize(Math.max(2,dimensions.cols-1),dimensions.rows);
+  } catch {}
+}
 function activate(id) {
   activeId = id;
   for (const s of sessions.values()) s.pane.hidden = s.id !== id;
@@ -57,27 +76,33 @@ function activate(id) {
   requestAnimationFrame(() => { fit(current()); current()?.term.focus(); });
   updateFilePanel();
 }
-async function newSession(connection = null) {
+async function newSession(connection = null, replaceId = null, localShell = null) {
   const id = crypto.randomUUID(), kind = connection ? 'ssh' : 'local';
-  const shell = $('shell').value;
+  const shell = localShell || $('shell').value;
   const name = connection?.name || (shell === 'cmd' ? 'CMD' : 'PowerShell');
   const pane = document.createElement('div'); pane.className = 'terminal-pane'; pane.dataset.session = id; $('terminals').append(pane);
-  const term = new Terminal({fontFamily:'"JetBrains Mono"',fontSize,fontWeight:'400',fontWeightBold:'500',lineHeight:1.32,letterSpacing:0,cursorBlink:true,cursorStyle:'bar',scrollback:10000,theme,allowProposedApi:true,convertEol:false,overviewRulerWidth:7,minimumContrastRatio:4.5,windowsPty:kind === 'local' ? {backend:'conpty',buildNumber:22621} : undefined});
+  const term = new Terminal({fontFamily:fonts[fontFamily],fontSize,fontWeight:'400',fontWeightBold:fontFamily==='JetBrains Mono'?'500':'700',lineHeight:1.32,letterSpacing:0,cursorBlink:true,cursorStyle:'bar',scrollback:10000,theme,allowProposedApi:true,convertEol:false,overviewRuler:{width:7},minimumContrastRatio:4.5,windowsPty:kind === 'local' ? {backend:'conpty',buildNumber:22621} : undefined});
   const fitter = new FitAddon(), search = new SearchAddon(); term.loadAddon(fitter); term.loadAddon(search);
-  const s = {id,kind,name,pane,term,fit:fitter,search,state:'connecting',connection:connection ? {...connection,password:undefined,passphrase:undefined} : null};
+  const s = {id,kind,name,shell,pane,term,fit:fitter,search,state:'connecting',connection:connection ? {...connection,password:undefined,passphrase:undefined} : null};
+  if(replaceId) { const old=sessions.get(replaceId); if(old){sessions.delete(replaceId);notify('close',{id:replaceId});clearTimeout(old.copyTimer);old.term.dispose();old.pane.remove();} }
   sessions.set(id,s); term.open(pane);
+  term.onSelectionChange(()=>{clearTimeout(s.copyTimer);if(term.hasSelection())s.copyTimer=setTimeout(()=>{if(sessions.has(id))copySelection(s,true).catch(report);},180);});
+  for(const event of ['pointerdown','mousedown','mouseup']) pane.addEventListener(event,e=>{if(e.button===2){e.preventDefault();e.stopImmediatePropagation();}},true);
+  pane.addEventListener('contextmenu',e=>{e.preventDefault();e.stopImmediatePropagation();if(term.hasSelection())copySelection(s).catch(report);else if(!e.shiftKey)pasteClipboard(s).catch(report);},true);
   term.onData(data => { s.search.clearDecorations(); term.clearSelection(); if (s.state === 'connected') notify('input', {id,data}); });
   term.onResize(({cols,rows}) => { if (s.state === 'connected') notify('resize',{id,cols,rows}); });
   term.attachCustomKeyEventHandler(e => {
-    if (e.ctrlKey && !e.altKey && ['c','v'].includes(e.key.toLowerCase())) {
-      if (e.key.toLowerCase() === 'c' && !term.hasSelection()) return true;
+    const clipboardKey = e.code === 'KeyC' ? 'c' : e.code === 'KeyV' ? 'v' : e.key.toLowerCase();
+    if (e.ctrlKey && !e.altKey && ['c','v'].includes(clipboardKey) && (!e.isComposing || clipboardKey === 'c' && term.hasSelection())) {
+      if (clipboardKey === 'c' && !term.hasSelection()) return !e.shiftKey;
       if (e.type === 'keydown') {
         e.preventDefault();
-        if (e.key.toLowerCase() === 'c') call('copy',{text:term.getSelection()}).then(() => toast('已复制')).catch(report);
-        else call('paste').then(text => { if (s.state === 'connected') term.paste(text); }).catch(report);
+        if (clipboardKey === 'c') copySelection(s).catch(report);
+        else pasteClipboard(s).catch(report);
       }
       return false;
     }
+    if(e.isComposing || e.keyCode===229 || e.key==='Process' || e.key==='Shift') return true;
     if (e.ctrlKey && (['t','w','k','Tab','0'].includes(e.key) || e.shiftKey && e.key.toLowerCase() === 'f')) return false;
     return true;
   });
@@ -87,6 +112,8 @@ async function newSession(connection = null) {
     await call('create',{id,kind,shell,cols:term.cols,rows:term.rows,...connection});
     if (!sessions.has(id)) return;
     if (s.state !== 'offline') s.state = 'connected';
+    const profile=profiles.find(p=>p.id===connection?.profileId);
+    if(profile && s.state==='connected'){profile.lastUsed=Date.now();renderProfiles();save().catch(report);}
     notify('resize',{id,cols:term.cols,rows:term.rows});
     renderTabs(); if (activeId === id) updateFilePanel();
   } catch (e) { if (sessions.has(id)) { s.state = 'offline'; term.writeln('\r\n\x1b[31m连接失败：' + String(e.message).replace(/[\x00-\x1f\x7f]/g,' ') + '\x1b[0m'); renderTabs(); } report(e); }
@@ -94,7 +121,7 @@ async function newSession(connection = null) {
 async function closeSession(id) {
   const s = sessions.get(id); if (!s) return;
   if (s.state !== 'offline' && !await confirmAction('关闭这个终端？','当前终端中的运行任务与连接将结束。')) return;
-  sessions.delete(id); notify('close',{id}); s.term.dispose(); s.pane.remove();
+  sessions.delete(id); notify('close',{id}); clearTimeout(s.copyTimer);s.term.dispose(); s.pane.remove();
   if (activeId === id) activate([...sessions.keys()].at(-1) || null); else renderTabs();
 }
 function setFont(value) {
@@ -102,8 +129,9 @@ function setFont(value) {
   for (const s of sessions.values()) { s.term.options.fontSize = fontSize; fit(s); }
   clearTimeout(setFont.timer); setFont.timer = setTimeout(() => save().catch(report), 200);
 }
-window.addEventListener('wheel', e => { if (e.shiftKey) { e.preventDefault(); if (e.deltaY || e.deltaX) setFont(fontSize + ((e.deltaY || e.deltaX) < 0 ? 1 : -1)); } }, {passive:false,capture:true});
+window.addEventListener('wheel', e => { if (e.ctrlKey) { e.preventDefault(); if (e.deltaY || e.deltaX) setFont(fontSize + ((e.deltaY || e.deltaX) < 0 ? 1 : -1)); } }, {passive:false,capture:true});
 new ResizeObserver(() => fit(current())).observe($('terminals'));
+window.addEventListener('resize',()=>{if(innerWidth<1100 && !$('files').hidden && !$('snippets').hidden)$('files').hidden=true;});
 bridge?.addEventListener('message', ({data:m}) => {
   if (m.request) { const p = pending.get(m.request); if (p) { clearTimeout(p.timer); pending.delete(m.request); m.ok ? p.resolve(m.result) : p.reject(new Error(m.error)); } return; }
   const s = sessions.get(m.id);
@@ -114,21 +142,72 @@ bridge?.addEventListener('message', ({data:m}) => {
 });
 function renderProfiles() {
   $('profiles').replaceChildren();
+  $('recent-profiles').replaceChildren();
   if (!profiles.length) { const hint = document.createElement('div'); hint.className = 'no-profiles'; hint.textContent = '暂无连接'; $('profiles').append(hint); }
-  for (const p of profiles) {
+  const ordered=[...profiles].reverse().sort((a,b)=>(b.lastUsed||0)-(a.lastUsed||0));
+  for (const [index,p] of ordered.entries()) {
+    const makeRow=()=>{
     const row = document.createElement('div'); row.className = 'profile';
     const button = document.createElement('button'); button.className = 'profile-main'; button.title = '编辑 / 连接 ' + p.name;
     const name = document.createElement('b'); name.textContent = '⌁  ' + p.name;
     const host = document.createElement('small'); host.textContent = `${p.username}@${p.host}`; button.append(name,host); button.onclick = () => openConnection(p);
-    const remove = document.createElement('button'); remove.textContent = '×'; remove.title = '删除配置'; remove.className = 'profile-delete';
-    remove.onclick = async () => { if (await confirmAction('删除连接配置？', p.name)) { profiles = profiles.filter(x => x.id !== p.id); renderProfiles(); await save(); } };
-    row.append(button,remove); $('profiles').append(row);
+    const connect = document.createElement('button'); connect.textContent = '连接'; connect.title = '连接 '+p.name; connect.className = 'profile-connect';
+    connect.onclick=()=>connectProfile(p).catch(report);
+    row.append(button,connect);return row;
+    };
+    $('profiles').append(makeRow());if(index<8)$('recent-profiles').append(makeRow());
   }
 }
+const profileOpening=new Set();
+function requestSecret(profile) {
+  return new Promise(resolve=>{
+    const dialog=$('quick-auth-dialog'), input=$('quick-secret');
+    $('quick-auth-title').textContent=profile.name || profile.host;
+    $('quick-auth-label').textContent=profile.keyPath?'私钥口令（可留空）':'密码';input.value='';let answer=null;
+    $('quick-auth-form').onsubmit=e=>{e.preventDefault();answer=input.value;dialog.close();};
+    dialog.addEventListener('close',()=>{input.value='';resolve(answer);},{once:true});dialog.showModal();input.focus();
+  });
+}
+async function credentialsFor(profile) {
+  const {id,rememberPassword,lastUsed,...data}=profile;
+  const connection={...data,profileId:profile.profileId || id};
+  if(profile.keyPath) { const secret=await requestSecret(profile);if(secret===null)return null;connection.passphrase=secret; }
+  else if(rememberPassword) connection.password=await call('password',{id});
+  else { const secret=await requestSecret(profile);if(secret===null)return null;connection.password=secret; }
+  return connection;
+}
+async function connectProfile(profile,replaceId=null) {
+  const key=replaceId || profile.id || profile.host;
+  if(profileOpening.has(key) || $('quick-auth-dialog').open)return;
+  profileOpening.add(key);$('connections-menu').hidePopover();
+  try { const connection=await credentialsFor(profile);if(connection)await newSession(connection,replaceId); }
+  finally {profileOpening.delete(key);}
+}
+async function repeatSession(s,replace=false) {
+  if(!sessions.has(s.id) || s.state==='connecting')return;
+  if(replace && s.state==='connected' && !await confirmAction('重新连接？','当前连接和正在运行的任务将结束。'))return;
+  if(s.kind==='local')return newSession(null,replace?s.id:null,s.shell);
+  const profile=profiles.find(p=>p.id===s.connection.profileId) || s.connection;
+  await connectProfile(profile,replace?s.id:null);
+}
+function showSessionMenu(s,x,y) {
+  const menu=$('session-menu');menu.replaceChildren();
+  for(const [label,action] of [['复制会话',()=>repeatSession(s)],['复制连接信息',()=>call('copy',{text:s.kind==='ssh'?`${s.connection.username}@${s.connection.host}:${s.connection.port||22}`:s.shell})],['重新连接',()=>repeatSession(s,true)],['关闭',()=>closeSession(s.id)]]) {
+    const button=document.createElement('button');button.role='menuitem';button.textContent=label;
+    button.onclick=()=>{menu.hidePopover();Promise.resolve(action()).catch(report);};menu.append(button);
+  }
+  menu.showPopover();menu.style.left=Math.max(6,Math.min(x,innerWidth-menu.offsetWidth-6))+'px';menu.style.top=Math.max(6,Math.min(y,innerHeight-menu.offsetHeight-6))+'px';menu.firstElementChild.focus();
+}
+$('session-menu').onkeydown=e=>{
+  if(!['ArrowDown','ArrowUp','Home','End'].includes(e.key))return;e.preventDefault();
+  const buttons=[...$('session-menu').children],i=buttons.indexOf(document.activeElement);
+  buttons[e.key==='Home'?0:e.key==='End'?buttons.length-1:(i+(e.key==='ArrowDown'?1:buttons.length-1))%buttons.length]?.focus();
+};
 async function openConnection(profile = null) {
   $('connections-menu').hidePopover();
   const epoch = ++connectionEpoch;
   editingProfile = profile?.id || null; $('connect-form').reset(); $('connect-form').elements.password.disabled = false;
+  $('delete-profile').hidden=!profile;
   for (const key of ['name','host','port','username','keyPath']) if (profile?.[key]) $('connect-form').elements[key].value = profile[key];
   $('remember-password').checked = !!profile?.rememberPassword;
   $('auth').value = profile?.keyPath ? 'key' : 'password'; authChanged(); $('connect-dialog').showModal();
@@ -147,13 +226,19 @@ async function connectionFromForm() {
   const p = Object.fromEntries(new FormData($('connect-form'))); p.port = Number(p.port); p.host = p.host.trim(); p.username = p.username.trim(); p.name = p.name.trim();
   if (!p.host || !p.username || !p.name) { toast('请完整填写连接信息'); return null; }
   if ($('auth').value === 'password') { p.keyPath = ''; p.passphrase = ''; } else { p.password = ''; if (!p.keyPath) { toast('请选择 SSH 私钥'); return null; } }
-  const profile = {id:editingProfile || crypto.randomUUID(),name:p.name,host:p.host,port:p.port,username:p.username,keyPath:p.keyPath,rememberPassword:$('auth').value === 'password' && $('remember-password').checked};
+  const profile = {id:editingProfile || crypto.randomUUID(),name:p.name,host:p.host,port:p.port,username:p.username,keyPath:p.keyPath,rememberPassword:$('auth').value === 'password' && $('remember-password').checked,lastUsed:profiles.find(x=>x.id===editingProfile)?.lastUsed||0};
   const previous = profiles;
   profiles = profiles.filter(x => x.id !== profile.id); profiles.push(profile);
   try { await save({id:profile.id,rememberPassword:profile.rememberPassword,password:p.password}); renderProfiles(); }
   catch (e) { profiles = previous; report(e); return null; }
-  return p;
+  return {...p,profileId:profile.id};
 }
+$('delete-profile').onclick=async()=>{
+  const profile=profiles.find(p=>p.id===editingProfile);if(!profile)return;
+  if(!await confirmAction('删除连接配置？',profile.name))return;
+  const old=profiles;profiles=profiles.filter(p=>p.id!==profile.id);
+  try{await save();renderProfiles();$('connect-dialog').close();}catch(e){profiles=old;report(e);}
+};
 $('auth').onchange = authChanged;
 $('choose-key').onclick = async () => { const path = await call('chooseKey'); if (path) $('connect-form').elements.keyPath.value = path; };
 $('save-profile').onclick = async () => { if (await connectionFromForm()) { $('connect-dialog').close(); toast('连接配置已保存'); } };
@@ -210,7 +295,7 @@ function formatSize(bytes) { return bytes < 1024 ? `${bytes} B` : bytes < 104857
 function updateFilePanel() {
   $('file-menu').hidePopover();
   const s = current(), available = s?.kind === 'ssh' && s.state === 'connected';
-  fileEpoch++; $('files-hint').hidden = available; $('files-content').hidden = !available;
+  fileFilter.set([]); fileEpoch++; $('files-hint').hidden = available; $('files-content').hidden = !available;
   renderTransfer();
   if (!$('files').hidden && available) loadFiles(s.remotePath || '.');
 }
@@ -250,15 +335,9 @@ $('file-menu').onkeydown = e => {
   e.preventDefault(); const buttons = [...$('file-menu').children], index = buttons.indexOf(document.activeElement);
   buttons[e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length-1 : (index+(e.key === 'ArrowDown' ? 1 : buttons.length-1))%buttons.length]?.focus();
 };
-async function loadFiles(path) {
-  $('file-menu').hidePopover();
-  const id = activeId, epoch = ++fileEpoch;
-  if (current()) current().fileSummary = '读取目录…'; renderTransfer();
-  try {
-    const result = await call('sftp',{id,op:'list',path});
-    if (activeId !== id || epoch !== fileEpoch) return;
-    filePath = result.path; current().remotePath = filePath; $('remote-path').value = filePath; $('file-list').replaceChildren(); current().fileSummary = `${result.entries.length} 个项目`; renderTransfer();
-    for (const entry of result.entries) {
+const fileFilter = setupFileFilter(entries => {
+  const id=activeId; $('file-list').replaceChildren();
+    for (const entry of entries) {
       const row = document.createElement('div'); row.className = 'file-row';
       const open = document.createElement('button'); open.className = 'file-open'; open.title = entry.directory ? '打开目录' : '下载 ' + entry.name;
       const icon = document.createElement('span'); icon.textContent = entry.directory ? '▱' : '≡';
@@ -270,6 +349,16 @@ async function loadFiles(path) {
       row.oncontextmenu = e => { e.preventDefault(); openFileMenu(entry,id,row,e.clientX,e.clientY); };
       row.append(open,size,rename); $('file-list').append(row);
     }
+});
+async function loadFiles(path) {
+  $('file-menu').hidePopover();
+  const id = activeId, epoch = ++fileEpoch;
+  if (current()) current().fileSummary = '读取目录…'; renderTransfer();
+  try {
+    const result = await call('sftp',{id,op:'list',path});
+    if (activeId !== id || epoch !== fileEpoch) return;
+    filePath = result.path; current().remotePath = filePath; $('remote-path').value = filePath; $('file-list').replaceChildren(); current().fileSummary = `${result.entries.length} 个项目`; renderTransfer();
+    fileFilter.set(result.entries);
   } catch (e) { if (activeId === id && epoch === fileEpoch) { current().fileSummary = '读取失败：' + e.message; renderTransfer(); $('file-list').replaceChildren(); } }
 }
 function validFileName(name) { if (!name || name === '.' || name === '..' || /[/\\\x00]/.test(name)) { toast('名称不能包含路径分隔符'); return false; } return true; }
@@ -291,7 +380,7 @@ async function fileAction(op,args) {
   catch (e) { if (isTransfer) { s.transfer.state = 'failed'; s.transfer.error = e.message; } report(e); }
   finally { fileBusy.delete(id); renderTransfer(); }
 }
-function toggleFiles() { $('file-menu').hidePopover(); $('files').hidden = !$('files').hidden; updateFilePanel(); }
+function toggleFiles() { if($('files').hidden && innerWidth<1100) $('snippets').hidden=true; $('file-menu').hidePopover(); $('files').hidden = !$('files').hidden; updateFilePanel(); }
 $('files-close').onclick = () => { $('file-menu').hidePopover(); $('files').hidden = true; fileEpoch++; };
 $('path-form').onsubmit = e => { e.preventDefault(); loadFiles($('remote-path').value); };
 $('parent-dir').onclick = () => loadFiles(filePath.replace(/\/[^/]+\/?$/,'') || '/');
@@ -303,12 +392,13 @@ function confirmAction(title,message) { return new Promise(resolve => { $('confi
 document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => $(b.dataset.close).close());
 function openConnections() { $('connections-menu').togglePopover(); }
 window.terminalAction = action => {
-  $('file-menu').hidePopover();
+  $('file-menu').hidePopover(); $('session-menu').hidePopover();
   for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
   if (action !== 'connections') $('connections-menu').hidePopover();
   if (action === 'connections') openConnections();
   else if (action === 'search') openSearch();
   else if (action === 'files') toggleFiles();
+  else if (action === 'snippets') { if($('snippets').hidden && innerWidth<1100) $('files').hidden=true; snippets.toggle(); }
   else if (action === 'settings') $('settings-dialog').showModal();
   else if (action === 'help') $('help-dialog').showModal();
 };
@@ -318,8 +408,17 @@ for (const id of ['new-ssh','add-profile']) $(id).onclick = () => openConnection
 $('font-reset').onclick = () => setFont(14);
 $('font-minus').onclick = () => setFont(fontSize-1);
 $('font-plus').onclick = () => setFont(fontSize+1);
+$('terminal-font').onchange = async () => {
+  fontFamily=$('terminal-font').value;
+  await document.fonts.load(`${fontSize}px ${fonts[fontFamily].split(',')[0]}`);
+  for(const s of sessions.values()){s.term.options.fontFamily=fonts[fontFamily];s.term.options.fontWeightBold=fontFamily==='JetBrains Mono'?'500':'700';}
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{for(const s of sessions.values())fit(s);}));
+  await save();
+};
+document.fonts.addEventListener('loadingdone',()=>requestAnimationFrame(()=>fit(current())));
 $('shell').onchange = () => save().catch(report);
 window.addEventListener('keydown', e => {
+  if(e.isComposing || e.keyCode===229 || e.key==='Process' || e.key==='Shift') return;
   if (e.key === 'Escape' && !document.querySelector('dialog[open]')) { for (const s of sessions.values()) { s.search.clearDecorations(); s.term.clearSelection(); } }
   if (!e.ctrlKey || e.altKey) return;
   if (document.querySelector('dialog[open]')) return;
@@ -332,7 +431,7 @@ window.addEventListener('keydown', e => {
 },true);
 async function init() {
   sftpSize.load();
-  try { const settings = await call('load'); sftpSize.load(settings.sftpWidth); profiles = Array.isArray(settings.profiles) ? settings.profiles : []; fontSize = Math.max(10,Math.min(28,settings.fontSize || 14)); $('font-size').textContent = fontSize; $('shell').value = settings.defaultShell === 'cmd' ? 'cmd' : 'powershell'; renderProfiles(); renderTabs(); }
+  try { const settings = await call('load'); sftpSize.load(settings.sftpWidth); snippets.load(settings.snippets); fontFamily=Object.hasOwn(fonts,settings.fontFamily)?settings.fontFamily:'JetBrains Mono'; $('terminal-font').value=fontFamily; profiles = Array.isArray(settings.profiles) ? settings.profiles : []; fontSize = Math.max(10,Math.min(28,settings.fontSize || 14)); $('font-size').textContent = fontSize; $('shell').value = settings.defaultShell === 'cmd' ? 'cmd' : 'powershell'; renderProfiles(); renderTabs(); }
   catch (e) { report(e); renderProfiles(); }
 }
 init();
