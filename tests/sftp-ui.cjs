@@ -29,6 +29,7 @@ const path = require('node:path');
           if (m.action === 'load') reply({profiles:[],fontSize:14,sftpWidth:Number(sessionStorage.getItem('sftpWidth') || 440)});
           else if (m.action === 'save') { sessionStorage.setItem('sftpWidth',m.sftpWidth); reply(null); }
           else if (m.action === 'sftp' && m.op === 'list') reply({path:'/home/test',entries:[{name:'sample.bin',path:'/home/test/sample.bin',size:1048576,directory:false},{name:'folder',path:'/home/test/folder',directory:true}]});
+          else if (m.action === 'sftp' && m.op === 'prepareDownload') reply({destination:'C:/fixture/'+m.path.split('/').at(-1)});
           else if (m.action === 'sftp' && m.op === 'download') { testBridge.download=m; testBridge.emit({type:'transfer',id:m.id,done:262144,total:1048576}); }
           else if (m.action === 'pauseDownload') { reply(null); testBridge.emit({request:testBridge.download.request,ok:true,result:{paused:true}}); }
           else reply(null);
@@ -112,6 +113,33 @@ const path = require('node:path');
     await expect(page.locator('#transfer-toggle')).toBeHidden();
     await page.locator('.file-row').filter({hasText:'folder'}).click({button:'right'});
     await expect(page.locator('#file-menu [role=menuitem]').first()).toHaveText('打开文件夹');
+    await page.locator('#file-menu').getByText('下载文件夹 / 续传',{exact:true}).click();
+    await expect.poll(()=>page.evaluate(()=>testBridge.download.directory)).toBe('yes');
+    const folderRequest=await page.evaluate(()=>testBridge.download.request);
+    await file.locator('.file-open').click();
+    await expect(page.locator('.download-job').filter({hasText:'等待'})).toHaveCount(1);
+    expect(await page.evaluate(()=>testBridge.download.request)).toBe(folderRequest);
+    await page.locator('#transfer-toggle').click();
+    await expect(page.locator('#transfer')).toContainText('已暂停');
+    expect(await page.evaluate(()=>testBridge.download.request)).toBe(folderRequest);
+    await page.locator('#transfer-toggle').click();
+    await expect.poll(()=>page.evaluate(()=>testBridge.download.request)).not.toBe(folderRequest);
+    await page.evaluate(()=>{const m=testBridge.download;testBridge.emit({request:m.request,ok:true,result:{success:true}});});
+    await expect.poll(()=>page.evaluate(()=>testBridge.download.path)).toBe('/home/test/sample.bin');
+    expect(await page.evaluate(()=>testBridge.download.destination)).toBe('C:/fixture/sample.bin');
+    await page.locator('.file-row').filter({hasText:'folder'}).click({button:'right'});
+    await page.locator('#file-menu').getByText('下载文件夹 / 续传',{exact:true}).click();
+    const pendingFolder=page.locator('.download-job').filter({hasText:'folder'}).filter({hasText:'等待'});
+    await expect(pendingFolder).toHaveCount(1);await pendingFolder.getByRole('button',{name:'×',exact:true}).click();
+    await expect(page.locator('.download-job').filter({hasText:'等待'})).toHaveCount(0);
+    await page.evaluate(()=>{const m=testBridge.download;testBridge.emit({request:m.request,ok:false,error:'fixture interrupted'});});
+    await expect(page.locator('.download-job').filter({hasText:'失败'})).toHaveCount(1);
+    await page.locator('.download-job').filter({hasText:'失败'}).getByText('继续',{exact:true}).click();
+    await expect(page.locator('#transfer')).toContainText('传输中');
+    await page.evaluate(()=>{const m=testBridge.download;testBridge.emit({request:m.request,ok:true,result:{success:true}});});
+    await expect(page.locator('#transfer')).toContainText('已完成');
+    console.log('PASS folder queue serial ordering, pause holds queue, retry and remove pending task');
+
     await page.locator('#files-close').click();
     await expect(page.locator('#file-menu')).toBeHidden();
     await page.reload();

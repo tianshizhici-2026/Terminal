@@ -1,4 +1,4 @@
-export function setupSnippets({paste,save,confirm,report}) {
+export function setupSnippets({paste,execute,save,confirm,report}) {
   const panel = document.createElement('aside'); panel.id = 'snippets'; panel.hidden = true;
   panel.innerHTML = '<div class="panel-title"><span>常用代码</span><button id="snippets-close" title="关闭代码面板">×</button></div><button id="snippet-add">＋ 新增代码块</button><div id="snippet-list"></div>';
   document.querySelector('.workspace-body').append(panel);
@@ -21,8 +21,9 @@ export function setupSnippets({paste,save,confirm,report}) {
       const code=document.createElement('pre'); code.textContent=item.code; use.append(code);
       use.onclick=()=>paste(item.code);
       const actions=document.createElement('div'); actions.className='snippet-actions';
+      const run=document.createElement('button');run.className='snippet-run';run.textContent='执行';run.title='粘贴并回车执行';run.onclick=()=>execute(item.code);
       const remove=document.createElement('button'); remove.textContent='删除'; remove.onclick=async()=>{ if(await confirm('删除代码块？',item.code.slice(0,100))) await persist(items.filter(x=>x.id!==item.id)); };
-      actions.append(remove); row.append(use,actions); list.append(row);
+      actions.append(run,remove); row.append(use,actions); list.append(row);
     }
   }
   $('snippet-add').onclick=()=>add(); $('snippets-close').onclick=()=>{panel.hidden=true;};

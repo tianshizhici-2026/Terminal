@@ -119,9 +119,11 @@ public partial class MainWindow : Window
                 finally { opening.Remove(id); cancelled.Remove(id); }
             case "input":
                 if (sessions.TryGetValue(id, out var input)) input.Write(S(p, "data"));
+                else if (!opening.Contains(id)) Send(new { type = "exit", id });
                 return null;
             case "resize":
                 if (sessions.TryGetValue(id, out var resized)) resized.Resize(Math.Clamp(N(p, "cols", 80), 2, 500), Math.Clamp(N(p, "rows", 24), 2, 300));
+                else if (!opening.Contains(id)) Send(new { type = "exit", id });
                 return null;
             case "close":
                 if (downloads.TryGetValue(id, out var download)) download.Cancel();
@@ -164,10 +166,17 @@ public partial class MainWindow : Window
             if (dialog.ShowDialog(this) != true) return new { cancelled = true };
             local = dialog.FileName; path = path.TrimEnd('/') + "/" + Path.GetFileName(local);
         }
-        if (op == "download")
+        if (op is "download" or "prepareDownload")
         {
-            if (downloads.ContainsKey(id)) throw new InvalidOperationException("当前会话已有下载任务。");
-            if (S(p, "resume") == "yes" && downloadDestinations.TryGetValue((id, path), out var saved)) local = saved;
+            if (op == "download" && downloads.ContainsKey(id)) throw new InvalidOperationException("当前会话已有下载任务。");
+            if (op == "download" && S(p,"destination") is { Length: > 0 } destination) local = destination;
+            else if (S(p, "resume") == "yes" && downloadDestinations.TryGetValue((id, path), out var saved)) local = saved;
+            else if (S(p, "directory") == "yes")
+            {
+                var dialog = new OpenFolderDialog { Title = "选择保存位置（在其中创建同名文件夹）" };
+                if (dialog.ShowDialog(this) != true) return new { cancelled = true };
+                local = Path.Combine(dialog.FolderName, FolderDownload.SafeName(path.TrimEnd('/').Split('/').Last()));
+            }
             else
             {
                 var dialog = new SaveFileDialog { FileName = path.Split('/').Last(), Title = "下载 / 续传" };
@@ -175,17 +184,19 @@ public partial class MainWindow : Window
                 local = dialog.FileName;
             }
             downloadDestinations[(id, path)] = local;
+            if (op == "prepareDownload") return new { prepared = true, destination = local };
         }
         using var cancellation = new CancellationTokenSource();
         if (op == "download") downloads.Add(id, cancellation);
+        var operationLock = op == "list" ? remote.BrowseLock : remote.FileLock;
         bool locked = false;
         try
         {
-            await remote.FileLock.WaitAsync(cancellation.Token);
+            await operationLock.WaitAsync(cancellation.Token);
             locked = true;
             return await Task.Run<object?>(() =>
             {
-                var client = remote.Files;
+                var client = op == "list" ? remote.BrowserFiles : remote.Files;
                 if (!client.IsConnected) client.Connect();
                 if (op == "list")
                 {
@@ -201,7 +212,9 @@ public partial class MainWindow : Window
                 }
                 else if (op == "download")
                 {
-                    ResumableDownload.Run(client, remote.FileIdentity, path, local,
+                    if (S(p, "directory") == "yes") FolderDownload.Run(client, remote.FileIdentity, path, local,
+                        (done, total) => Send(new { type = "transfer", id, done, total }), cancellation.Token);
+                    else ResumableDownload.Run(client, remote.FileIdentity, path, local,
                         (done, total) => Send(new { type = "transfer", id, done, total }), cancellation.Token);
                 }
                 else if (op == "mkdir") client.CreateDirectory(path);
@@ -214,7 +227,7 @@ public partial class MainWindow : Window
         finally
         {
             if (op == "download") downloads.Remove(id);
-            if (locked) remote.FileLock.Release();
+            if (locked) operationLock.Release();
         }
     }
 }

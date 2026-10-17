@@ -69,6 +69,46 @@ try
     ResumableDownload.Run(source, identity, remotePath, emptyTarget, (_, _) => {});
     Check(new FileInfo(emptyTarget).Length == 0, "Empty file failed");
     Console.WriteLine("PASS empty file completion");
+    string remoteFolder = "/folder-" + Guid.NewGuid().ToString("N");
+    source.CreateDirectory(remoteFolder); source.CreateDirectory(remoteFolder+"/nested"); source.CreateDirectory(remoteFolder+"/empty");
+    using(var stream=new MemoryStream(payload))source.UploadFile(stream,remoteFolder+"/nested/data.bin");
+    using(var stream=new MemoryStream(Array.Empty<byte>()))source.UploadFile(stream,remoteFolder+"/zero");
+    string folderTarget=Path.Combine(folder,"downloaded");
+    try
+    {
+        using(var cancel=new CancellationTokenSource())
+        {
+            try{FolderDownload.Run(source,identity,remoteFolder,folderTarget,(n,_)=>{if(n>0)cancel.Cancel();},cancel.Token);throw new Exception("Folder pause ignored");}
+            catch(OperationCanceledException){}
+        }
+        Check(!Directory.Exists(folderTarget),"Incomplete folder exposed as complete");
+        Reject(()=>FolderDownload.Run(source,"other",remoteFolder,folderTarget,(_,_)=>{}),"folder rejects another server");
+        using(var reconnected=Connect())FolderDownload.Run(reconnected,identity,remoteFolder,folderTarget,(_,_)=>{});
+        Check(Directory.Exists(Path.Combine(folderTarget,"empty")),"Empty directory missing");
+        Check(payload.SequenceEqual(File.ReadAllBytes(Path.Combine(folderTarget,"nested","data.bin"))),"Folder bytes differ");
+        Check(new FileInfo(Path.Combine(folderTarget,"zero")).Length==0,"Empty file missing");
+        Reject(()=>FolderDownload.Run(source,identity,remoteFolder,folderTarget,(_,_)=>{}),"folder never overwrites existing destination");
+        Console.WriteLine("PASS nested folder, empty entries and pause/reconnect byte integrity");
+        string changedFolder=Path.Combine(folder,"changed-folder");
+        using(var broken=Connect())
+        {
+            try{FolderDownload.Run(broken,identity,remoteFolder,changedFolder,(n,_)=>{if(n>0)broken.Disconnect();});}
+            catch(Exception ex) when(ex is Renci.SshNet.Common.SshException or IOException or ObjectDisposedException){}
+        }
+        using(var reconnected=Connect())FolderDownload.Run(reconnected,identity,remoteFolder,changedFolder,(_,_)=>{});
+        Check(payload.SequenceEqual(File.ReadAllBytes(Path.Combine(changedFolder,"nested","data.bin"))),"Disconnected folder bytes differ");
+        Console.WriteLine("PASS folder disconnect and resume");
+        string modified=Path.Combine(folder,"modified-folder");
+        using(var cancel=new CancellationTokenSource())
+        {
+            try{FolderDownload.Run(source,identity,remoteFolder,modified,(n,_)=>{if(n>0)cancel.Cancel();},cancel.Token);}catch(OperationCanceledException){}
+        }
+        using(var stream=new MemoryStream(new byte[]{1,2,3}))source.UploadFile(stream,remoteFolder+"/nested/data.bin");
+        Reject(()=>FolderDownload.Run(source,identity,remoteFolder,modified,(_,_)=>{}),"changed folder rejects resume");
+        foreach(var name in new[]{"..","CON","a/b","a\\b","file.","NUL.txt"})Reject(()=>FolderDownload.SafeName(name),"invalid Windows name: "+name);
+    }
+    finally{source.DeleteFile(remoteFolder+"/nested/data.bin");source.DeleteFile(remoteFolder+"/zero");source.DeleteDirectory(remoteFolder+"/nested");source.DeleteDirectory(remoteFolder+"/empty");source.DeleteDirectory(remoteFolder);}
+
 }
 finally
 {

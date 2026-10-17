@@ -24,8 +24,27 @@ using(var remote = new SshSession("127.0.0.1", 22992, "mist-test", "test-only", 
  if(!client.ListDirectory("/roundtrip").Any(x=>x.Name=="renamed.bin")) throw new Exception("Listing missing file");
  using var downloaded=new MemoryStream(); client.DownloadFile("/roundtrip/renamed.bin",downloaded);
  if(!payload.SequenceEqual(downloaded.ToArray())) throw new Exception("SFTP bytes differ");
+ await remote.FileLock.WaitAsync();
+ try
+ {
+  var listing=Task.Run(()=>{var browser=remote.BrowserFiles;browser.Connect();return browser.ListDirectory("/roundtrip").Any(x=>x.Name=="renamed.bin");});
+  if(!await listing.WaitAsync(TimeSpan.FromSeconds(5)))throw new Exception("Independent SFTP browser missing file");
+  Console.WriteLine("PASS SFTP browsing remains available while transfer lock is held");
+ }
+ finally {remote.FileLock.Release();}
  client.DeleteFile("/roundtrip/renamed.bin");client.DeleteDirectory("/roundtrip");
  Console.WriteLine("PASS SFTP mkdir, upload, rename, list and byte-identical download (128 KiB)");
+}
+foreach (var command in new[]{"__TEST_DROP_TRANSPORT__", "__TEST_CLOSE_SHELL__"})
+{
+ var ended=new TaskCompletionSource();int exitCount=0;
+ using var dropped=new SshSession("127.0.0.1",22992,"mist-test","test-only","","",_=>true);
+ dropped.Connect(80,24,_=>{},()=>{Interlocked.Increment(ref exitCount);ended.TrySetResult();});
+ dropped.Write(command+"\n");await ended.Task.WaitAsync(TimeSpan.FromSeconds(5));
+ dropped.Write("after exit");dropped.Resize(100,30);
+ await Task.Delay(100);
+ if(exitCount!=1)throw new Exception("Disconnect emitted multiple exit events");
+ Console.WriteLine("PASS immediate and single disconnect notification: "+command);
 }
 try { using var rejected=new SshSession("127.0.0.1",22992,"mist-test","test-only","","",_=>false);rejected.Connect(80,24,_=>{},()=>{});throw new Exception("Host verification bypassed"); }
 catch(Renci.SshNet.Common.SshConnectionException){Console.WriteLine("PASS rejected host key prevents SSH connection");}

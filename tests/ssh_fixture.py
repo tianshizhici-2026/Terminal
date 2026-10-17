@@ -20,6 +20,10 @@ class Server(paramiko.ServerInterface):
                 while True:
                     data=channel.recv(32768)
                     if not data: break
+                    if b"__TEST_DROP_TRANSPORT__" in data:
+                        channel.get_transport().close(); break
+                    if b"__TEST_CLOSE_SHELL__" in data:
+                        channel.close(); break
                     channel.send(data)
             except Exception: pass
         threading.Thread(target=echo,daemon=True).start(); return True

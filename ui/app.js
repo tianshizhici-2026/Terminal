@@ -4,6 +4,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import './style.css';
 import { setupSftpResize } from './sftp-resize';
 import { setupSnippets } from './snippets';
+import { setupDownloadQueue } from './download-queue';
 import { setupFileFilter } from './file-filter';
 
 const $ = id => document.getElementById(id);
@@ -34,10 +35,15 @@ let fontFamily = 'JetBrains Mono';
 const theme = { background:'#2d2f34', foreground:'#edf0f5', cursor:'#d1f0da', cursorAccent:'#2d2f34', selectionBackground:'#445a78', selectionForeground:'#ffffff', selectionInactiveBackground:'#414c5e', black:'#737d8c', red:'#ff7885', green:'#82db70', yellow:'#f5ca57', blue:'#75adff', magenta:'#d18cff', cyan:'#4dd9df', white:'#e0e6ef', brightBlack:'#a5afbf', brightRed:'#ffa0a9', brightGreen:'#adf299', brightYellow:'#ffe293', brightBlue:'#a6caff', brightMagenta:'#e5b5ff', brightCyan:'#96f0ee', brightWhite:'#ffffff' };
 const decorations = {matchBackground:'#665320', matchBorder:'#e3bc51', matchOverviewRuler:'#e3bc51', activeMatchBackground:'#3f6652', activeMatchBorder:'#c7f0d4', activeMatchColorOverviewRuler:'#c7f0d4'};
 const sftpSize = setupSftpResize($('files'), () => save().catch(report));
-const snippets = setupSnippets({paste:text=>pasteText(current(),text),save:()=>save(),confirm:confirmAction,report});
+const snippets = setupSnippets({paste:text=>pasteText(current(),text),execute:text=>executeSnippet(current(),text),save:()=>save(),confirm:confirmAction,report});
 function save(credential) { return call('save', {fontSize, fontFamily, snippets:snippets.items, sftpWidth:sftpSize.width, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
 async function copySelection(s, quiet=false) { const text=s?.term.getSelection(); if(text){await call('copy',{text});if(!quiet)toast('已复制');} }
 function pasteText(s,text) { if(s?.state!=='connected'){toast('请先连接终端');return;} s.term.paste(text);s.term.focus(); }
+function executeSnippet(s,text) {
+  if(s?.state!=='connected'){toast('请先连接终端');return;}
+  s.term.paste(text.replace(/[\r\n]+$/, ''));
+  s.term.input('\r',true);s.term.focus();
+}
 async function pasteClipboard(s) { const text=await call('paste');if(sessions.has(s.id))pasteText(s,text); }
 function focusTerminal() { if(!document.querySelector('dialog[open]') && !document.activeElement?.matches('input,textarea:not(.xterm-helper-textarea),select')) current()?.term.focus(); }
 window.addEventListener('focus',()=>requestAnimationFrame(focusTerminal));
@@ -46,13 +52,13 @@ function updateStatus() {
   const s = current();
   $('status').textContent = s ? (s.state === 'connected' ? (s.kind === 'ssh' ? `${s.connection.username}@${s.connection.host}` : '本地 · ' + s.name) : s.state === 'connecting' ? '正在连接…' : '会话已结束') : '未连接';
   $('session-count').textContent = `${sessions.size} 个会话`;
-  $('status-dot').style.background = s?.state === 'offline' ? '#c29684' : '#b1cebc';
+  $('status-dot').style.background = s?.state === 'offline' ? '#ff7885' : '#b1cebc';
 }
 function renderTabs() {
   $('tabs').replaceChildren();
   for (const s of sessions.values()) {
     const tab = document.createElement('div'); tab.className = `tab ${s.id === activeId ? 'selected' : ''} ${s.state}`;
-    const dot = document.createElement('span'); dot.className = 'tab-dot';
+    const dot = document.createElement('span'); dot.className = 'tab-dot'; dot.title=s.state==='offline'?'已断开':s.state==='connecting'?'正在连接':'已连接';
     const label = document.createElement('button'); label.className = 'tab-label'; label.textContent = s.name; label.setAttribute('role', 'tab'); label.setAttribute('aria-selected', String(s.id === activeId)); label.title = s.name;
     label.onclick = () => activate(s.id); label.ondblclick = async () => { const name = await askText('重命名终端', s.name); if (name) { s.name = name.slice(0,60); renderTabs(); updateStatus(); } };
     const close = document.createElement('button'); close.className = 'tab-close'; close.textContent = '×'; close.title = '关闭 ' + s.name; close.onclick = () => closeSession(s.id);
@@ -77,6 +83,7 @@ function activate(id) {
   updateFilePanel();
 }
 async function newSession(connection = null, replaceId = null, localShell = null) {
+  if(replaceId)return reconnectSession(sessions.get(replaceId),connection);
   const id = crypto.randomUUID(), kind = connection ? 'ssh' : 'local';
   const shell = localShell || $('shell').value;
   const name = connection?.name || (shell === 'cmd' ? 'CMD' : 'PowerShell');
@@ -84,13 +91,13 @@ async function newSession(connection = null, replaceId = null, localShell = null
   const term = new Terminal({fontFamily:fonts[fontFamily],fontSize,fontWeight:'400',fontWeightBold:fontFamily==='JetBrains Mono'?'500':'700',lineHeight:1.32,letterSpacing:0,cursorBlink:true,cursorStyle:'bar',scrollback:10000,theme,allowProposedApi:true,convertEol:false,overviewRuler:{width:7},minimumContrastRatio:4.5,windowsPty:kind === 'local' ? {backend:'conpty',buildNumber:22621} : undefined});
   const fitter = new FitAddon(), search = new SearchAddon(); term.loadAddon(fitter); term.loadAddon(search);
   const s = {id,kind,name,shell,pane,term,fit:fitter,search,state:'connecting',connection:connection ? {...connection,password:undefined,passphrase:undefined} : null};
-  if(replaceId) { const old=sessions.get(replaceId); if(old){sessions.delete(replaceId);notify('close',{id:replaceId});clearTimeout(old.copyTimer);old.term.dispose();old.pane.remove();} }
+
   sessions.set(id,s); term.open(pane);
-  term.onSelectionChange(()=>{clearTimeout(s.copyTimer);if(term.hasSelection())s.copyTimer=setTimeout(()=>{if(sessions.has(id))copySelection(s,true).catch(report);},180);});
+  term.onSelectionChange(()=>{clearTimeout(s.copyTimer);if(term.hasSelection())s.copyTimer=setTimeout(()=>{if(sessions.has(s.id))copySelection(s,true).catch(report);},180);});
   for(const event of ['pointerdown','mousedown','mouseup']) pane.addEventListener(event,e=>{if(e.button===2){e.preventDefault();e.stopImmediatePropagation();}},true);
   pane.addEventListener('contextmenu',e=>{e.preventDefault();e.stopImmediatePropagation();if(term.hasSelection())copySelection(s).catch(report);else if(!e.shiftKey)pasteClipboard(s).catch(report);},true);
-  term.onData(data => { s.search.clearDecorations(); term.clearSelection(); if (s.state === 'connected') notify('input', {id,data}); });
-  term.onResize(({cols,rows}) => { if (s.state === 'connected') notify('resize',{id,cols,rows}); });
+  term.onData(data => { s.search.clearDecorations(); term.clearSelection(); if (s.state === 'connected') notify('input', {id:s.id,data}); });
+  term.onResize(({cols,rows}) => { if (s.state === 'connected') notify('resize',{id:s.id,cols,rows}); });
   term.attachCustomKeyEventHandler(e => {
     const clipboardKey = e.code === 'KeyC' ? 'c' : e.code === 'KeyV' ? 'v' : e.key.toLowerCase();
     if (e.ctrlKey && !e.altKey && ['c','v'].includes(clipboardKey) && (!e.isComposing || clipboardKey === 'c' && term.hasSelection())) {
@@ -115,8 +122,35 @@ async function newSession(connection = null, replaceId = null, localShell = null
     const profile=profiles.find(p=>p.id===connection?.profileId);
     if(profile && s.state==='connected'){profile.lastUsed=Date.now();renderProfiles();save().catch(report);}
     notify('resize',{id,cols:term.cols,rows:term.rows});
-    renderTabs(); if (activeId === id) updateFilePanel();
+    renderTabs(); if (activeId === id) updateFilePanel(); downloadQueue.pump(s);
   } catch (e) { if (sessions.has(id)) { s.state = 'offline'; term.writeln('\r\n\x1b[31m连接失败：' + String(e.message).replace(/[\x00-\x1f\x7f]/g,' ') + '\x1b[0m'); renderTabs(); } report(e); }
+}
+async function reconnectSession(s, connection) {
+  if(!s || s.state==='connecting')return;
+  const oldId=s.id, id=crypto.randomUUID(), wasActive=activeId===oldId;
+  const order=[...sessions.entries()];
+  const transferIndex=(s.downloadJobs||[]).indexOf(s.transfer);
+  s.downloadJobs=(s.downloadJobs||[]).map(j=>({...j,state:['running','pausing','selecting'].includes(j.state)?'paused':j.state}));
+  s.transfer=s.downloadJobs[transferIndex] || null;
+  s.id=id;s.state='connecting';s.pane.dataset.session=id;
+  if(connection)s.connection={...connection,password:undefined,passphrase:undefined};
+  sessions.clear();for(const [key,value] of order)sessions.set(key===oldId?id:key,value);
+  if(wasActive)activeId=id;
+  renderTabs();if(wasActive)updateFilePanel();
+  try {
+    await call('close',{id:oldId});
+    if(!sessions.has(id))return;
+    const viewport=s.term.buffer.active.viewportY, atBottom=viewport===s.term.buffer.active.baseY;
+    await new Promise(resolve=>s.term.write((s.term.buffer.active.type==='alternate'?'\x1b[?1049l':'')+'\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[0m\r\n',()=>{if(atBottom)s.term.scrollToBottom();else s.term.scrollToLine(viewport);resolve();}));
+    await call('create',{id,kind:s.kind,shell:s.shell,cols:s.term.cols,rows:s.term.rows,...connection});
+    if(!sessions.has(id))return;
+    if(s.state!=='offline')s.state='connected';
+    notify('resize',{id,cols:s.term.cols,rows:s.term.rows});
+    renderTabs();if(activeId===id){updateFilePanel();s.term.focus();}downloadQueue.pump(s);
+  } catch(e) {
+    if(sessions.has(id)){s.state='offline';s.term.writeln('\r\n连接失败：'+String(e.message).replace(/[\x00-\x1f\x7f]/g,' '));renderTabs();if(activeId===id)updateFilePanel();}
+    report(e);
+  }
 }
 async function closeSession(id) {
   const s = sessions.get(id); if (!s) return;
@@ -136,7 +170,7 @@ bridge?.addEventListener('message', ({data:m}) => {
   if (m.request) { const p = pending.get(m.request); if (p) { clearTimeout(p.timer); pending.delete(m.request); m.ok ? p.resolve(m.result) : p.reject(new Error(m.error)); } return; }
   const s = sessions.get(m.id);
   if (m.type === 'output' && s) s.term.write(m.data, () => { if ($('search-dialog').open) { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch,180); } });
-  if (m.type === 'exit' && s) { s.state = 'offline'; s.term.writeln('\r\n\x1b[90m— 会话已结束 —\x1b[0m'); notify('close',{id:s.id}); renderTabs(); if (activeId === s.id) updateFilePanel(); }
+  if (m.type === 'exit' && s && s.state !== 'offline') { s.state = 'offline'; s.term.writeln('\r\n\x1b[90m— 会话已结束 —\x1b[0m'); notify('close',{id:s.id}); renderTabs(); if (activeId === s.id) updateFilePanel(); }
   if (m.type === 'transfer' && s?.transfer) { s.transfer.done = m.done; s.transfer.total = m.total; renderTransfer(); }
   if (m.type === 'error') report(m.error);
 });
@@ -299,7 +333,9 @@ function updateFilePanel() {
   renderTransfer();
   if (!$('files').hidden && available) loadFiles(s.remotePath || '.');
 }
+const downloadQueue=setupDownloadQueue({call,current,sessions,busy:fileBusy,render:()=>renderTransfer(),report});
 function renderTransfer() {
+  downloadQueue.refresh();
   const s = current(), t = s?.transfer;
   $('transfer-toggle').hidden = !t || t.op !== 'download' || !['running','pausing','paused','failed'].includes(t.state);
   $('transfer-toggle').disabled = t?.state === 'pausing' || s?.state !== 'connected';
@@ -313,7 +349,7 @@ $('transfer-toggle').onclick = async () => {
   const s = current(), t = s?.transfer;
   if (!t) return;
   if (t.state === 'running') { t.state = 'pausing'; renderTransfer(); try { await call('pauseDownload',{id:s.id}); } catch(e) { report(e); } }
-  else if (['paused','failed'].includes(t.state)) fileAction('download',{path:t.path,resume:'yes'});
+  else if (['paused','failed'].includes(t.state)) downloadQueue.resume(s,t);
 };
 function openFileMenu(entry, id, row, x, y) {
   const menu = $('file-menu'); menu.replaceChildren();
@@ -323,6 +359,7 @@ function openFileMenu(entry, id, row, x, y) {
     menu.append(button);
   };
   add(entry.directory ? '打开文件夹' : '下载 / 续传', () => entry.directory ? loadFiles(entry.path) : fileAction('download',{path:entry.path}));
+  if(entry.directory)add('下载文件夹 / 续传',()=>fileAction('download',{path:entry.path,directory:'yes'}));
   add('重命名', async () => { const name = await askText('重命名',entry.name); if (activeId === id && name && validFileName(name)) fileAction('rename',{path:entry.path,destination:entry.path.slice(0,entry.path.lastIndexOf('/')+1)+name}); });
   menu.showPopover();
   const bounds = row.getBoundingClientRect();
@@ -365,6 +402,7 @@ function validFileName(name) { if (!name || name === '.' || name === '..' || /[/
 async function fileAction(op,args) {
   const id = activeId, s = current();
   if (!s || s.state !== 'connected') return;
+  if(op==='download')return downloadQueue.enqueue(s,args);
   if (fileBusy.has(id)) { toast('请等待当前传输完成'); return; }
   const path = filePath, previous = s.transfer, isTransfer = ['download','upload'].includes(op);
   fileBusy.add(id);
@@ -378,7 +416,7 @@ async function fileAction(op,args) {
     if (activeId === id && !result?.paused && !result?.cancelled && op !== 'download') await loadFiles(path);
   }
   catch (e) { if (isTransfer) { s.transfer.state = 'failed'; s.transfer.error = e.message; } report(e); }
-  finally { fileBusy.delete(id); renderTransfer(); }
+  finally { fileBusy.delete(id); renderTransfer(); downloadQueue.pump(s); }
 }
 function toggleFiles() { if($('files').hidden && innerWidth<1100) $('snippets').hidden=true; $('file-menu').hidePopover(); $('files').hidden = !$('files').hidden; updateFilePanel(); }
 $('files-close').onclick = () => { $('file-menu').hidePopover(); $('files').hidden = true; fileEpoch++; };

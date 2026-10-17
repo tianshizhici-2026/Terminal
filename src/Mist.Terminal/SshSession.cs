@@ -8,11 +8,16 @@ internal sealed class SshSession : ITerminalSession
 {
     private readonly SshClient ssh;
     private readonly SftpClient sftp;
+    private readonly SftpClient browser;
     private ShellStream? shell;
     private readonly List<PrivateKeyFile> keys = [];
     private bool disposed;
+    private Action? disconnected;
+    private int exitReported;
     public readonly SemaphoreSlim FileLock = new(1, 1);
     public SftpClient Files => sftp;
+    public SftpClient BrowserFiles => browser;
+    public readonly SemaphoreSlim BrowseLock = new(1, 1);
     private string fingerprint = "";
     private readonly string endpoint;
     public string FileIdentity => endpoint + "|" + fingerprint;
@@ -30,17 +35,23 @@ internal sealed class SshSession : ITerminalSession
             else method = new PasswordAuthenticationMethod(username, password);
             return new ConnectionInfo(host, port, username, method) { Timeout = TimeSpan.FromSeconds(20) };
         }
-        ssh = new SshClient(Info()); sftp = new SftpClient(Info());
+        ssh = new SshClient(Info()); sftp = new SftpClient(Info()); browser = new SftpClient(Info());
         ssh.HostKeyReceived += (_, e) => e.CanTrust = verify(e.FingerPrintSHA256);
         sftp.HostKeyReceived += (_, e) => { e.CanTrust = verify(e.FingerPrintSHA256); if (e.CanTrust) fingerprint = e.FingerPrintSHA256; };
+        browser.HostKeyReceived += (_, e) => e.CanTrust = verify(e.FingerPrintSHA256);
+        browser.OperationTimeout = TimeSpan.FromSeconds(30);
         ssh.KeepAliveInterval = TimeSpan.FromSeconds(30);
         sftp.OperationTimeout = TimeSpan.FromSeconds(30);
     }
     public void Connect(int cols, int rows, Action<string> onData, Action onExit)
     {
+        disconnected = onExit;
+        ssh.ErrorOccurred += (_, _) => ReportExit();
         ssh.Connect();
         shell = ssh.CreateShellStream("xterm-256color", (uint)cols, (uint)rows, 0, 0, 65536);
         var stream = shell;
+        stream.ErrorOccurred += (_, _) => ReportExit();
+        stream.Closed += (_, _) => ReportExit();
         _ = Task.Run(() =>
         {
             try
@@ -50,15 +61,29 @@ internal sealed class SshSession : ITerminalSession
                 while ((count = reader.Read(buffer, 0, buffer.Length)) > 0) onData(new string(buffer, 0, count));
             }
             catch (Exception ex) { if (!disposed) onData($"\r\n连接已断开：{ex.Message}\r\n"); }
-            finally { onExit(); }
+            finally { ReportExit(); }
         });
     }
-    public void Write(string data) { if (!disposed) { shell?.Write(data); shell?.Flush(); } }
-    public void Resize(int cols, int rows) { if (!disposed) shell?.ChangeWindowSize((uint)cols, (uint)rows, 0, 0); }
+    private void ReportExit()
+    {
+        if (Interlocked.Exchange(ref exitReported, 1) == 0) disconnected?.Invoke();
+    }
+    public void Write(string data)
+    {
+        if (disposed || !ssh.IsConnected || shell == null) { ReportExit(); return; }
+        try { shell.Write(data); shell.Flush(); }
+        catch { ReportExit(); }
+    }
+    public void Resize(int cols, int rows)
+    {
+        if (disposed || !ssh.IsConnected || shell == null) { ReportExit(); return; }
+        try { shell.ChangeWindowSize((uint)cols, (uint)rows, 0, 0); }
+        catch { ReportExit(); }
+    }
     public void Dispose()
     {
         if (disposed) return; disposed = true;
-        shell?.Dispose(); ssh.Dispose(); sftp.Dispose();
+        shell?.Dispose(); ssh.Dispose(); sftp.Dispose(); browser.Dispose();
         foreach (var key in keys) key.Dispose();
     }
 }

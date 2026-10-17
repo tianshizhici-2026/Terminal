@@ -16,3 +16,7 @@ __pycache__/
 *.terminal.part
 *.terminal.part.json
 *.terminal.part.lock
+
+*.terminal.folder.part/
+*.terminal.folder.part.json
+*.terminal.folder.part.lock
