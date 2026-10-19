@@ -1,3 +1,4 @@
+import { setupSnippetSort } from './snippet-sort';
 export function setupSnippets({paste,execute,save,confirm,report}) {
   const panel = document.createElement('aside'); panel.id = 'snippets'; panel.hidden = true;
   panel.innerHTML = '<div class="panel-title"><span>常用代码</span><button id="snippets-close" title="关闭代码面板">×</button></div><button id="snippet-add">＋ 新增代码块</button><div id="snippet-list"></div>';
@@ -10,14 +11,14 @@ export function setupSnippets({paste,execute,save,confirm,report}) {
   function add() { $('snippet-code').value = ''; dialog.showModal(); $('snippet-code').focus(); }
   async function persist(next) {
     const old = items; items = next;
-    try { await save(); render(); return true; } catch(e) { items = old; report(e); return false; }
+    try { await save(); render(); return true; } catch(e) { items = old; render(); report(e); return false; }
   }
   function render() {
     const list = $('snippet-list'); list.replaceChildren();
     if (!items.length) { const hint=document.createElement('p'); hint.className='panel-empty'; hint.textContent='暂无代码块'; list.append(hint); }
     for (const item of items) {
-      const row = document.createElement('div'); row.className='snippet-row';
-      const use = document.createElement('button'); use.className='snippet-use'; use.title='粘贴到当前终端';
+      const row = document.createElement('div'); row.className='snippet-row'; row.dataset.snippet=item.id;
+      const use = document.createElement('button'); use.className='snippet-use'; use.title='点击粘贴，长按拖动排序';
       const code=document.createElement('pre'); code.textContent=item.code; use.append(code);
       use.onclick=()=>paste(item.code);
       const actions=document.createElement('div'); actions.className='snippet-actions';
@@ -26,6 +27,7 @@ export function setupSnippets({paste,execute,save,confirm,report}) {
       actions.append(run,remove); row.append(use,actions); list.append(row);
     }
   }
+  setupSnippetSort($('snippet-list'),{restore:render,commit:ids=>{const next=ids.map(id=>items.find(item=>item.id===id));if(next.length===items.length && next.every(Boolean) && next.some((item,index)=>item!==items[index]))return persist(next);}});
   $('snippet-add').onclick=()=>add(); $('snippets-close').onclick=()=>{panel.hidden=true;};
   $('snippet-cancel').onclick=()=>dialog.close();
   $('snippet-form').onsubmit=async e=>{

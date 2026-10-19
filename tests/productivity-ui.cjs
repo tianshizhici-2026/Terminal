@@ -14,7 +14,7 @@ const http=require('node:http'),fs=require('node:fs'),path=require('node:path');
    if(m.action==='load')result=JSON.parse(sessionStorage.getItem('settings')||JSON.stringify(initial));
    else if(m.action==='save')sessionStorage.setItem('settings',JSON.stringify(m));
    else if(m.action==='password')result='fixture-only';
-   else if(m.action==='copy')testBridge.clipboard=m.text;
+   else if(m.action==='copy'){if(testBridge.copyFailure){queueMicrotask(()=>testBridge.emit({request:m.request,ok:false,error:'Clipboard busy'}));return;}testBridge.clipboard=m.text;}
    else if(m.action==='paste')result=testBridge.clipboard;
    else if(m.action==='sftp'&&m.op==='list')result={path:'/home/test',entries:[{name:'sample.bin',path:'/home/test/sample.bin',size:100,directory:false},{name:'folder',path:'/home/test/folder',directory:true},{name:'a'.repeat(60)+'!',path:'/slow',size:2,directory:false}]};
    if(m.request)queueMicrotask(()=>testBridge.emit({request:m.request,ok:true,result}));
@@ -34,17 +34,30 @@ const http=require('node:http'),fs=require('node:fs'),path=require('node:path');
  console.log('PASS Ctrl wheel changes font size; Shift wheel preserves size');
  const active=()=>page.evaluate(()=>document.querySelector('.terminal-pane:not([hidden])').dataset.session);
  const emit=async data=>page.evaluate(({id,data})=>testBridge.emit({type:'output',id,data}),{id:await active(),data});
+
+ await page.locator('.xterm-helper-textarea').focus();
+ for(const [sequence,shape] of [['\x1b[2 q','block'],['\x1b[4 q','underline'],['\x1b[6 q','bar'],['\x1b[?1049h\x1b[2 q\x1b[?12l','block'],['\x1b[?1049l\x1b[0 q','bar']]){
+  await emit(sequence);
+  await expect(page.locator('.xterm-cursor.xterm-cursor-blink')).toHaveCount(1);
+  await expect(page.locator('.xterm-cursor')).toHaveClass(new RegExp('xterm-cursor-'+shape));
+ }
+ console.log('PASS blinking cursor in normal and alternate buffers, all shapes and DEC blink-disable');
  await emit('\x1b[2J\x1b[HCOPY_ME');
  await expect(page.locator('.xterm-rows')).toContainText('COPY_ME');
  const row=await page.locator('.xterm-rows>div').first().boundingBox();
  const cell=await page.evaluate(()=>{const m=testBridge.calls.filter(x=>x.action==='resize').at(-1);return document.querySelector('.xterm-screen').getBoundingClientRect().width/m.cols;});
- await page.mouse.move(row.x+1,row.y+row.height/2);await page.mouse.down();await page.mouse.move(row.x+7*cell+1,row.y+row.height/2,{steps:8});await page.mouse.up();
+ const selectCopy=async()=>{await page.evaluate(()=>testBridge.clipboard='');await page.mouse.move(row.x+1,row.y+row.height/2);await page.mouse.down();await page.mouse.move(row.x+7*cell+1,row.y+row.height/2,{steps:8});await page.mouse.up();};
+ await selectCopy();await page.waitForTimeout(400);expect(await page.evaluate(()=>testBridge.clipboard)).toBe('');await expect.poll(()=>page.locator('.xterm-selection div').count()).toBeGreaterThan(0);
+ await page.mouse.click(row.x+3,row.y+row.height/2,{button:'right'});
  await expect.poll(()=>page.evaluate(()=>testBridge.clipboard)).toBe('COPY_ME');
- await page.evaluate(()=>testBridge.clipboard='');await page.keyboard.press('Control+Shift+c');
+ await expect(page.locator('.xterm-selection div')).toHaveCount(0);await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
+ await page.evaluate(()=>testBridge.copyFailure=true);await selectCopy();await page.keyboard.press('Control+Shift+c');await expect(page.locator('#toast')).toHaveText('Clipboard busy');await expect.poll(()=>page.locator('.xterm-selection div').count()).toBeGreaterThan(0);await page.evaluate(()=>testBridge.copyFailure=false);
+ await selectCopy();await page.keyboard.press('Control+c');await expect.poll(()=>page.evaluate(()=>testBridge.clipboard)).toBe('COPY_ME');
+ await selectCopy();await page.keyboard.press('Control+Shift+c');
  await expect.poll(()=>page.evaluate(()=>testBridge.clipboard)).toBe('COPY_ME');
- await page.evaluate(()=>{testBridge.clipboard='';document.querySelector('.terminal-pane:not([hidden]) .xterm-helper-textarea').dispatchEvent(new KeyboardEvent('keydown',{key:'Process',code:'KeyC',keyCode:229,ctrlKey:true,bubbles:true,cancelable:true}));});
+ await selectCopy();await page.evaluate(()=>{testBridge.clipboard='';document.querySelector('.terminal-pane:not([hidden]) .xterm-helper-textarea').dispatchEvent(new KeyboardEvent('keydown',{key:'Process',code:'KeyC',keyCode:229,ctrlKey:true,bubbles:true,cancelable:true}));});
  await expect.poll(()=>page.evaluate(()=>testBridge.clipboard)).toBe('COPY_ME');
- await page.evaluate(()=>testBridge.clipboard='');await page.keyboard.down('Shift');await page.mouse.click(row.x+3,row.y+row.height/2,{button:'right'});await page.keyboard.up('Shift');
+ await selectCopy();await page.keyboard.down('Shift');await page.mouse.click(row.x+3,row.y+row.height/2,{button:'right'});await page.keyboard.up('Shift');
  await expect.poll(()=>page.evaluate(()=>testBridge.clipboard)).toBe('COPY_ME');
  await page.keyboard.press('Escape');
  await emit('\x1b[?1000h\x1b[?1006h');
@@ -54,7 +67,7 @@ const http=require('node:http'),fs=require('node:fs'),path=require('node:path');
  expect(await page.evaluate(()=>testBridge.calls.filter(m=>m.action==='input').length)).toBe(before+1);
  await page.keyboard.press('Control+c');await expect.poll(()=>page.evaluate(()=>testBridge.calls.filter(m=>m.action==='input').at(-1)?.data)).toBe('\x03');
  await emit('\x1b[?1000l\x1b[?1006l');
- console.log('PASS selection auto-copy, CtrlShiftC, Shift-right-copy, right-paste under mouse reporting and CtrlC interrupt');
+ console.log('PASS selection does not copy; right-click copies and clears selection, CtrlShiftC, Shift-right-copy, right-paste under mouse reporting and CtrlC interrupt');
  await page.locator('.tab').click({button:'right'});await page.locator('#session-menu').getByText('复制会话',{exact:true}).click();await expect(page.locator('.tab')).toHaveCount(2);
  await page.locator('.tab').first().click();
  await emit('\r\nRECONNECT_HISTORY_MARKER\r\n');await expect(page.locator('.terminal-pane:not([hidden]) .xterm-rows')).toContainText('RECONNECT_HISTORY_MARKER');
@@ -87,6 +100,25 @@ const http=require('node:http'),fs=require('node:fs'),path=require('node:path');
  await expect(page.locator('.snippet-row').getByText('编辑',{exact:true})).toHaveCount(0);
  const codeBox=await page.locator('.snippet-use').boundingBox(),deleteBox=await page.locator('.snippet-actions').boundingBox();expect(deleteBox.x).toBeGreaterThanOrEqual(codeBox.x+codeBox.width-1);
  expect(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('settings')).snippets[0].code)).toBe('printf 中文');
+ for(const code of ['pwd','ls -la']){await page.locator('#snippet-add').click();await page.locator('#snippet-code').fill(code);await page.locator('#snippet-form button[type=submit]').click();}
+ const order=()=>page.locator('.snippet-use pre').allTextContents();
+ const inputsBeforeSort=await page.evaluate(()=>testBridge.calls.filter(m=>m.action==='input').length);
+ const drag=async(from,to,cancel=false)=>{
+  const source=await page.locator('.snippet-use').nth(from).boundingBox(),target=await page.locator('.snippet-row').nth(to).boundingBox();
+  await page.mouse.move(source.x+20,source.y+source.height/2);await page.mouse.down();await page.waitForTimeout(400);
+  await expect(page.locator('.snippet-row.sorting')).toHaveCount(1);
+  await page.mouse.move(target.x+20,to>from?target.y+target.height-2:target.y+2,{steps:8});
+  if(cancel)await page.keyboard.press('Escape');await page.mouse.up();
+ };
+ await drag(0,2);await expect.poll(order).toEqual(['pwd','ls -la','printf 中文']);
+ await expect.poll(()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('settings')).snippets.map(x=>x.code))).toEqual(['pwd','ls -la','printf 中文']);
+ await drag(2,0,true);await expect.poll(order).toEqual(['pwd','ls -la','printf 中文']);
+ await drag(2,0);await expect.poll(order).toEqual(['printf 中文','pwd','ls -la']);
+ expect(await page.evaluate(()=>testBridge.calls.filter(m=>m.action==='input').length)).toBe(inputsBeforeSort);
+ for(const code of ['pwd','ls -la']){const row=page.locator('.snippet-row').filter({has:page.locator('pre',{hasText:code})});await row.getByText('删除',{exact:true}).click();await page.locator('#confirm-yes').click();await expect(row).toHaveCount(0);}
+ await page.locator('.snippet-use').click();await expect.poll(()=>page.evaluate(()=>testBridge.calls.filter(m=>m.action==='input').length)).toBe(inputsBeforeSort+1);
+ console.log('PASS long-press reorder, persisted order, Escape rollback and no accidental paste');
+
  await page.locator('#snippets-close').click();
  await page.evaluate(()=>window.terminalAction('files'));await expect(page.locator('.file-row')).toHaveCount(3);
  await page.evaluate(()=>window.terminalAction('snippets'));

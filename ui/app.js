@@ -1,3 +1,4 @@
+import { keepCursorBlinking } from './cursor';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
@@ -23,7 +24,7 @@ function call(action, args = {}) {
 }
 function notify(action, args = {}) { bridge?.postMessage({action, ...args}); }
 let toastTimer;
-function toast(message) { $('toast').textContent = message; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), 4500); }
+function toast(message, duration=4500) { $('toast').textContent = message; $('toast').classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), duration); }
 function report(error) { toast(error.message || String(error)); }
 window.addEventListener('unhandledrejection', e => { e.preventDefault(); report(e.reason); });
 const sessions = new Map();
@@ -37,7 +38,16 @@ const decorations = {matchBackground:'#665320', matchBorder:'#e3bc51', matchOver
 const sftpSize = setupSftpResize($('files'), () => save().catch(report));
 const snippets = setupSnippets({paste:text=>pasteText(current(),text),execute:text=>executeSnippet(current(),text),save:()=>save(),confirm:confirmAction,report});
 function save(credential) { return call('save', {fontSize, fontFamily, snippets:snippets.items, sftpWidth:sftpSize.width, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
-async function copySelection(s, quiet=false) { const text=s?.term.getSelection(); if(text){await call('copy',{text});if(!quiet)toast('已复制');} }
+async function copySelection(s, quiet=false) {
+  const text=s?.term.getSelection(), version=s?.selectionVersion;
+  if(!text)return;
+  await call('copy',{text});
+  if(sessions.get(s.id)===s && s.selectionVersion===version && !s.selectionDragging){
+    s.term.clearSelection();
+    if(activeId===s.id)focusTerminal();
+  }
+  if(!quiet)toast('已复制');
+}
 function pasteText(s,text) { if(s?.state!=='connected'){toast('请先连接终端');return;} s.term.paste(text);s.term.focus(); }
 function executeSnippet(s,text) {
   if(s?.state!=='connected'){toast('请先连接终端');return;}
@@ -89,11 +99,14 @@ async function newSession(connection = null, replaceId = null, localShell = null
   const name = connection?.name || (shell === 'cmd' ? 'CMD' : 'PowerShell');
   const pane = document.createElement('div'); pane.className = 'terminal-pane'; pane.dataset.session = id; $('terminals').append(pane);
   const term = new Terminal({fontFamily:fonts[fontFamily],fontSize,fontWeight:'400',fontWeightBold:fontFamily==='JetBrains Mono'?'500':'700',lineHeight:1.32,letterSpacing:0,cursorBlink:true,cursorStyle:'bar',scrollback:10000,theme,allowProposedApi:true,convertEol:false,overviewRuler:{width:7},minimumContrastRatio:4.5,windowsPty:kind === 'local' ? {backend:'conpty',buildNumber:22621} : undefined});
+  keepCursorBlinking(term);
   const fitter = new FitAddon(), search = new SearchAddon(); term.loadAddon(fitter); term.loadAddon(search);
   const s = {id,kind,name,shell,pane,term,fit:fitter,search,state:'connecting',connection:connection ? {...connection,password:undefined,passphrase:undefined} : null};
 
   sessions.set(id,s); term.open(pane);
-  term.onSelectionChange(()=>{clearTimeout(s.copyTimer);if(term.hasSelection())s.copyTimer=setTimeout(()=>{if(sessions.has(s.id))copySelection(s,true).catch(report);},180);});
+  s.selectionVersion=0;
+  term.onSelectionChange(()=>{s.selectionVersion++;});
+  pane.addEventListener('pointerdown',e=>{if(e.button===0){s.selectionDragging=true;}},true);
   for(const event of ['pointerdown','mousedown','mouseup']) pane.addEventListener(event,e=>{if(e.button===2){e.preventDefault();e.stopImmediatePropagation();}},true);
   pane.addEventListener('contextmenu',e=>{e.preventDefault();e.stopImmediatePropagation();if(term.hasSelection())copySelection(s).catch(report);else if(!e.shiftKey)pasteClipboard(s).catch(report);},true);
   term.onData(data => { s.search.clearDecorations(); term.clearSelection(); if (s.state === 'connected') notify('input', {id:s.id,data}); });
@@ -155,7 +168,7 @@ async function reconnectSession(s, connection) {
 async function closeSession(id) {
   const s = sessions.get(id); if (!s) return;
   if (s.state !== 'offline' && !await confirmAction('关闭这个终端？','当前终端中的运行任务与连接将结束。')) return;
-  sessions.delete(id); notify('close',{id}); clearTimeout(s.copyTimer);s.term.dispose(); s.pane.remove();
+  sessions.delete(id); notify('close',{id}); s.term.dispose(); s.pane.remove();
   if (activeId === id) activate([...sessions.keys()].at(-1) || null); else renderTabs();
 }
 function setFont(value) {
@@ -163,6 +176,7 @@ function setFont(value) {
   for (const s of sessions.values()) { s.term.options.fontSize = fontSize; fit(s); }
   clearTimeout(setFont.timer); setFont.timer = setTimeout(() => save().catch(report), 200);
 }
+for(const event of ['pointerup','pointercancel'])window.addEventListener(event,()=>{for(const s of sessions.values())if(s.selectionDragging){s.selectionDragging=false;}});
 window.addEventListener('wheel', e => { if (e.ctrlKey) { e.preventDefault(); if (e.deltaY || e.deltaX) setFont(fontSize + ((e.deltaY || e.deltaX) < 0 ? 1 : -1)); } }, {passive:false,capture:true});
 new ResizeObserver(() => fit(current())).observe($('terminals'));
 window.addEventListener('resize',()=>{if(innerWidth<1100 && !$('files').hidden && !$('snippets').hidden)$('files').hidden=true;});
@@ -333,7 +347,16 @@ function updateFilePanel() {
   renderTransfer();
   if (!$('files').hidden && available) loadFiles(s.remotePath || '.');
 }
-const downloadQueue=setupDownloadQueue({call,current,sessions,busy:fileBusy,render:()=>renderTransfer(),report});
+function completeTransfer(s, transfer) {
+  transfer.state='completed';transfer.expiresAt=Date.now()+5000;
+  setTimeout(()=>{
+    const expired=t=>t?.state==='completed' && t.expiresAt<=Date.now();
+    if(expired(s.transfer))s.transfer=null;
+    s.downloadJobs=(s.downloadJobs||[]).filter(t=>!expired(t));
+    if(sessions.get(s.id)===s)renderTransfer();
+  },5000);
+}
+const downloadQueue=setupDownloadQueue({call,current,sessions,busy:fileBusy,render:()=>renderTransfer(),report,complete:completeTransfer});
 function renderTransfer() {
   downloadQueue.refresh();
   const s = current(), t = s?.transfer;
@@ -412,7 +435,7 @@ async function fileAction(op,args) {
     const result = await call('sftp',{id,op,...args});
     if (result?.cancelled) s.transfer = previous;
     else if (result?.paused) s.transfer.state = 'paused';
-    else { if (isTransfer) s.transfer.state = 'completed'; toast('文件操作已完成'); }
+    else { if (isTransfer) completeTransfer(s,s.transfer); toast('文件操作已完成',5000); }
     if (activeId === id && !result?.paused && !result?.cancelled && op !== 'download') await loadFiles(path);
   }
   catch (e) { if (isTransfer) { s.transfer.state = 'failed'; s.transfer.error = e.message; } report(e); }

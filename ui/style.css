@@ -48,3 +48,5 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 #download-queue{max-height:180px;overflow:auto;border-top:1px solid var(--border);padding:5px}#download-queue[hidden]{display:none}.download-job{display:flex;align-items:center;gap:6px;padding:5px;font-size:14px}.download-job>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.download-job small{font-size:12px;color:var(--muted)}.download-job button{font-size:14px;padding:4px;flex-shrink:0}
 
 .snippet-run{color:var(--accent)}
+
+.snippet-use{user-select:none;touch-action:pan-y}.snippet-row.sorting{border-color:var(--accent);background:#3b4541;box-shadow:0 0 0 1px var(--accent);cursor:grabbing}.snippet-row.sorting .snippet-use{cursor:grabbing}

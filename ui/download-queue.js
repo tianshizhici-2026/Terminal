@@ -1,4 +1,4 @@
-export function setupDownloadQueue({call,current,sessions,busy,render,report}) {
+export function setupDownloadQueue({call,current,sessions,busy,render,report,complete}) {
   const panel=document.createElement('div');panel.id='download-queue';document.getElementById('file-list').after(panel);
   const labels={selecting:'选择位置',queued:'等待',running:'下载中',pausing:'暂停中',paused:'已暂停',failed:'失败',completed:'完成'};
   function refresh(){
@@ -32,7 +32,7 @@ export function setupDownloadQueue({call,current,sessions,busy,render,report}) {
     const runId=s.id;busy.add(runId);job.state='running';s.transfer=job;render();
     try{
       const result=await call('sftp',{id:s.id,op:'download',path:job.path,directory:job.directory,destination:job.destination,resume:'yes'});
-      job.state=result?.paused?'paused':result?.cancelled?'failed':'completed';
+      if(result?.paused)job.state='paused';else if(result?.cancelled)job.state='failed';else complete(s,job);
     }catch(e){job.state='failed';job.error=e.message;report(e);}
     finally{busy.delete(runId);if(s.id===runId){render();pump(s);}}
   }
