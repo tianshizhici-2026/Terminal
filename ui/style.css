@@ -50,3 +50,7 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 .snippet-run{color:var(--accent)}
 
 .snippet-use{user-select:none;touch-action:pan-y}.snippet-row.sorting{border-color:var(--accent);background:#3b4541;box-shadow:0 0 0 1px var(--accent);cursor:grabbing}.snippet-row.sorting .snippet-use{cursor:grabbing}
+
+.profile-main{user-select:none;touch-action:pan-y}.profile.sorting{background:#3b4541;box-shadow:inset 0 0 0 1px var(--accent);cursor:grabbing}.profile.sorting .profile-main{cursor:grabbing}
+
+.tab-label{user-select:none;touch-action:pan-x}.tab.sorting{background:#3b4541;box-shadow:inset 0 0 0 1px var(--accent)}.tab.sorting .tab-label{cursor:grabbing}

@@ -1,3 +1,4 @@
+import { setupSnippetSort } from './snippet-sort';
 import { keepCursorBlinking } from './cursor';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -64,10 +65,15 @@ function updateStatus() {
   $('session-count').textContent = `${sessions.size} 个会话`;
   $('status-dot').style.background = s?.state === 'offline' ? '#ff7885' : '#b1cebc';
 }
+setupSnippetSort($('tabs'),{axis:'x',rowSelector:'.tab',ignoreSelector:'.tab-close',idKey:'session',restore:renderTabs,commit:ids=>{
+  if(ids.length!==sessions.size || new Set(ids).size!==sessions.size || ids.some(id=>!sessions.has(id))){renderTabs();return;}
+  const ordered=ids.map(id=>[id,sessions.get(id)]);sessions.clear();for(const [id,s] of ordered)sessions.set(id,s);
+  renderTabs();focusTerminal();
+}});
 function renderTabs() {
   $('tabs').replaceChildren();
   for (const s of sessions.values()) {
-    const tab = document.createElement('div'); tab.className = `tab ${s.id === activeId ? 'selected' : ''} ${s.state}`;
+    const tab = document.createElement('div'); tab.dataset.session=s.id; tab.className = `tab ${s.id === activeId ? 'selected' : ''} ${s.state}`;
     const dot = document.createElement('span'); dot.className = 'tab-dot'; dot.title=s.state==='offline'?'已断开':s.state==='connecting'?'正在连接':'已连接';
     const label = document.createElement('button'); label.className = 'tab-label'; label.textContent = s.name; label.setAttribute('role', 'tab'); label.setAttribute('aria-selected', String(s.id === activeId)); label.title = s.name;
     label.onclick = () => activate(s.id); label.ondblclick = async () => { const name = await askText('重命名终端', s.name); if (name) { s.name = name.slice(0,60); renderTabs(); updateStatus(); } };
@@ -188,14 +194,27 @@ bridge?.addEventListener('message', ({data:m}) => {
   if (m.type === 'transfer' && s?.transfer) { s.transfer.done = m.done; s.transfer.total = m.total; renderTransfer(); }
   if (m.type === 'error') report(m.error);
 });
+function orderedProfiles() {
+  return profiles.some(p=>Number.isFinite(p.sortOrder))
+    ? [...profiles].sort((a,b)=>(a.sortOrder??Number.MAX_SAFE_INTEGER)-(b.sortOrder??Number.MAX_SAFE_INTEGER))
+    : [...profiles].reverse().sort((a,b)=>(b.lastUsed||0)-(a.lastUsed||0));
+}
+async function reorderProfiles(ids) {
+  const ordered=orderedProfiles(), visible=new Set(ids), old=profiles;
+  const next=[...ids.map(id=>ordered.find(p=>p.id===id)),...ordered.filter(p=>!visible.has(p.id))];
+  if(next.length!==profiles.length || next.some(p=>!p))return;
+  profiles=next.map((p,index)=>({...p,sortOrder:index}));
+  try{await save();renderProfiles();}catch(e){profiles=old;renderProfiles();report(e);}
+}
+for(const id of ['profiles','recent-profiles'])setupSnippetSort($(id),{commit:reorderProfiles,restore:renderProfiles,rowSelector:'.profile',ignoreSelector:'.profile-connect',idKey:'profile'});
 function renderProfiles() {
   $('profiles').replaceChildren();
   $('recent-profiles').replaceChildren();
   if (!profiles.length) { const hint = document.createElement('div'); hint.className = 'no-profiles'; hint.textContent = '暂无连接'; $('profiles').append(hint); }
-  const ordered=[...profiles].reverse().sort((a,b)=>(b.lastUsed||0)-(a.lastUsed||0));
+  const ordered=orderedProfiles();
   for (const [index,p] of ordered.entries()) {
     const makeRow=()=>{
-    const row = document.createElement('div'); row.className = 'profile';
+    const row = document.createElement('div'); row.className = 'profile'; row.dataset.profile=p.id;
     const button = document.createElement('button'); button.className = 'profile-main'; button.title = '编辑 / 连接 ' + p.name;
     const name = document.createElement('b'); name.textContent = '⌁  ' + p.name;
     const host = document.createElement('small'); host.textContent = `${p.username}@${p.host}`; button.append(name,host); button.onclick = () => openConnection(p);
@@ -217,7 +236,7 @@ function requestSecret(profile) {
   });
 }
 async function credentialsFor(profile) {
-  const {id,rememberPassword,lastUsed,...data}=profile;
+  const {id,rememberPassword,lastUsed,sortOrder,...data}=profile;
   const connection={...data,profileId:profile.profileId || id};
   if(profile.keyPath) { const secret=await requestSecret(profile);if(secret===null)return null;connection.passphrase=secret; }
   else if(rememberPassword) connection.password=await call('password',{id});
@@ -276,6 +295,7 @@ async function connectionFromForm() {
   if ($('auth').value === 'password') { p.keyPath = ''; p.passphrase = ''; } else { p.password = ''; if (!p.keyPath) { toast('请选择 SSH 私钥'); return null; } }
   const profile = {id:editingProfile || crypto.randomUUID(),name:p.name,host:p.host,port:p.port,username:p.username,keyPath:p.keyPath,rememberPassword:$('auth').value === 'password' && $('remember-password').checked,lastUsed:profiles.find(x=>x.id===editingProfile)?.lastUsed||0};
   const previous = profiles;
+  if(profiles.some(p=>Number.isFinite(p.sortOrder)))profile.sortOrder=profiles.find(p=>p.id===profile.id)?.sortOrder ?? Math.max(-1,...profiles.map(p=>p.sortOrder??-1))+1;
   profiles = profiles.filter(x => x.id !== profile.id); profiles.push(profile);
   try { await save({id:profile.id,rememberPassword:profile.rememberPassword,password:p.password}); renderProfiles(); }
   catch (e) { profiles = previous; report(e); return null; }

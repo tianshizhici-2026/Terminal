@@ -1,13 +1,13 @@
 {
   "name": "terminal-desktop",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "A calm Windows terminal with SSH and SFTP",
   "main": "index.js",
   "scripts": {
     "build": "node scripts/build.mjs",
     "start": "npm run build && dotnet run --project src/Mist.Terminal",
     "test": "node tests/native-ui.cjs",
-    "publish": "npm run build && dotnet publish src/Mist.Terminal -c Release -r win-x64 --self-contained true -o dist/Terminal-1.5.1-win-x64",
+    "publish": "npm run build && dotnet publish src/Mist.Terminal -c Release -r win-x64 --self-contained true -o dist/Terminal-1.5.2-win-x64",
     "test:backend": "dotnet run --project tests/Backend",
     "test:credentials": "dotnet run --project tests/Credentials",
     "test:window": "dotnet run --project tests/WindowBounds",

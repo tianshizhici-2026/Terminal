@@ -20,10 +20,11 @@ try {
  var sized=Request(null);sized["sftpWidth"]=680;Save(sized);
  Check(new SettingsStore(path).LoadForUi()["sftpWidth"]!.GetValue<int>()==680&&store.GetPassword("test")==secret,"SFTP width persists without changing saved password");
  sized["sftpWidth"]=9999;Save(sized);Check(store.LoadForUi()["sftpWidth"]!.GetValue<int>()==1200,"SFTP width is bounded");
- var extended=Request(null);extended["fontFamily"]="SimHei";extended["profiles"]![0]!["lastUsed"]=123456789;
+ var extended=Request(null);extended["fontFamily"]="SimHei";extended["profiles"]![0]!["lastUsed"]=123456789;extended["profiles"]![0]!["sortOrder"]=2;
  extended["snippets"]=new JsonArray(new JsonObject{["id"]="code-1",["title"]="中文代码",["code"]="pwd\nls -la"});Save(extended);
  var restored=new SettingsStore(path).LoadForUi();
  Check(restored["fontFamily"]!.GetValue<string>()=="SimHei"&&restored["snippets"]![0]!["code"]!.GetValue<string>()=="pwd\nls -la"&&restored["profiles"]![0]!["lastUsed"]!.GetValue<long>()==123456789,"font, snippets and recent connection persist");
+ Check(restored["profiles"]![0]!["sortOrder"]!.GetValue<int>()==2,"manual server order persists");
  Save(Request(null));Check(store.LoadForUi()["snippets"]!.AsArray().Count==1&&store.GetPassword("test")==secret,"legacy settings update preserves snippets and password");
  Save(Request(true,"replacement"));Check(store.GetPassword("test")=="replacement","password replacement persists");
  Save(Request(false));Check(store.GetPassword("test")==""&&!File.ReadAllText(path).Contains("passwordCipher"),"unchecking removes saved password");

@@ -1,16 +1,17 @@
-export function setupSnippetSort(list,{commit,restore}) {
+export function setupSnippetSort(list,{commit,restore,rowSelector='.snippet-row',ignoreSelector='.snippet-actions',idKey='snippet',axis='y'}) {
   let gesture=null, suppressClick=false, saving=false;
   function position(){
     if(!gesture?.active)return;
-    const {row,y}=gesture;
-    const before=[...list.children].find(other=>other!==row && y<other.getBoundingClientRect().top+other.getBoundingClientRect().height/2);
+    const {row}=gesture; const point=gesture[axis];
+    const before=[...list.children].find(other=>other!==row && point<(axis==='x'?other.getBoundingClientRect().left+other.getBoundingClientRect().width/2:other.getBoundingClientRect().top+other.getBoundingClientRect().height/2));
     list.insertBefore(row,before||null);
   }
   function scroll(){
     if(!gesture?.active)return;
     const bounds=list.getBoundingClientRect();
-    const delta=gesture.y<bounds.top+30?-7:gesture.y>bounds.bottom-30?7:0;
-    if(delta){list.scrollTop+=delta;position();}
+    const start=axis==='x'?bounds.left:bounds.top,end=axis==='x'?bounds.right:bounds.bottom;
+    const delta=gesture[axis]<start+30?-7:gesture[axis]>end-30?7:0;
+    if(delta){if(axis==='x')list.scrollLeft+=delta;else list.scrollTop+=delta;position();}
     gesture.frame=requestAnimationFrame(scroll);
   }
   function finish(cancel=false){
@@ -20,14 +21,14 @@ export function setupSnippetSort(list,{commit,restore}) {
     if(!g.active)return;
     suppressClick=true;
     if(cancel){restore();return;}
-    saving=true;Promise.resolve(commit([...list.children].map(row=>row.dataset.snippet))).finally(()=>{saving=false;});
+    saving=true;Promise.resolve(commit([...list.children].map(row=>row.dataset[idKey]))).finally(()=>{saving=false;});
   }
   list.addEventListener('pointerdown',e=>{
     suppressClick=false;
-    if(saving||e.button!==0||!e.isPrimary||e.target.closest('.snippet-actions'))return;
-    const row=e.target.closest('.snippet-row');if(!row)return;
+    if(saving||e.button!==0||!e.isPrimary||e.target.closest(ignoreSelector))return;
+    const row=e.target.closest(rowSelector);if(!row)return;
     finish(true);
-    const g=gesture={row,id:e.pointerId,x:e.clientX,y:e.clientY,startY:e.clientY,active:false};
+    const g=gesture={row,id:e.pointerId,x:e.clientX,startX:e.clientX,y:e.clientY,startY:e.clientY,active:false};
     g.timer=setTimeout(()=>{
       if(gesture!==g)return;
       g.active=true;suppressClick=true;row.classList.add('sorting');list.setPointerCapture(g.id);scroll();
@@ -35,8 +36,8 @@ export function setupSnippetSort(list,{commit,restore}) {
   });
   list.addEventListener('pointermove',e=>{
     if(!gesture||gesture.id!==e.pointerId)return;
-    gesture.y=e.clientY;
-    if(!gesture.active){if(Math.hypot(e.clientX-gesture.x,e.clientY-gesture.startY)>7)finish(true);return;}
+    gesture.x=e.clientX;gesture.y=e.clientY;
+    if(!gesture.active){if(Math.hypot(e.clientX-gesture.startX,e.clientY-gesture.startY)>7)finish(true);return;}
     e.preventDefault();position();
   });
   window.addEventListener('pointerup',e=>{if(gesture?.id===e.pointerId)finish();});
