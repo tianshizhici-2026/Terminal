@@ -3,8 +3,17 @@ export function setupSnippetSort(list,{commit,restore,rowSelector='.snippet-row'
   function position(){
     if(!gesture?.active)return;
     const {row}=gesture; const point=gesture[axis];
-    const before=[...list.children].find(other=>other!==row && point<(axis==='x'?other.getBoundingClientRect().left+other.getBoundingClientRect().width/2:other.getBoundingClientRect().top+other.getBoundingClientRect().height/2));
-    list.insertBefore(row,before||null);
+    const children=[...list.children];
+    const layout=el=>{const r=el.getBoundingClientRect(),t=new DOMMatrixReadOnly(getComputedStyle(el).transform);return {left:r.left-t.m41,top:r.top-t.m42,width:r.width,height:r.height};};
+    const before=children.find(other=>{const r=layout(other);return other!==row && point<(axis==='x'?r.left+r.width/2:r.top+r.height/2);})||null;
+    if(row.nextElementSibling===before)return;
+    const previous=new Map(children.map(el=>[el,el.getBoundingClientRect()]));
+    children.forEach(el=>el.getAnimations().forEach(a=>a.cancel()));
+    list.insertBefore(row,before);
+    if(!matchMedia('(prefers-reduced-motion: reduce)').matches)for(const el of children){
+      const old=previous.get(el),next=el.getBoundingClientRect();
+      if(old.left!==next.left||old.top!==next.top)el.animate([{transform:`translate(${old.left-next.left}px,${old.top-next.top}px)`},{transform:'translate(0,0)'}],{duration:160,easing:'ease-out'});
+    }
   }
   function scroll(){
     if(!gesture?.active)return;
@@ -32,7 +41,7 @@ export function setupSnippetSort(list,{commit,restore,rowSelector='.snippet-row'
     g.timer=setTimeout(()=>{
       if(gesture!==g)return;
       g.active=true;suppressClick=true;row.classList.add('sorting');list.setPointerCapture(g.id);scroll();
-    },350);
+    },180);
   });
   list.addEventListener('pointermove',e=>{
     if(!gesture||gesture.id!==e.pointerId)return;

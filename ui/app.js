@@ -275,7 +275,7 @@ async function openConnection(profile = null) {
   const epoch = ++connectionEpoch;
   editingProfile = profile?.id || null; $('connect-form').reset(); $('connect-form').elements.password.disabled = false;
   $('delete-profile').hidden=!profile;
-  for (const key of ['name','host','port','username','keyPath']) if (profile?.[key]) $('connect-form').elements[key].value = profile[key];
+  for (const key of ['name','host','port','username','keyPath','initialDirectory']) if (profile?.[key]) $('connect-form').elements[key].value = profile[key];
   $('remember-password').checked = !!profile?.rememberPassword;
   $('auth').value = profile?.keyPath ? 'key' : 'password'; authChanged(); $('connect-dialog').showModal();
   const field = $('connect-form').elements.password;
@@ -293,7 +293,7 @@ async function connectionFromForm() {
   const p = Object.fromEntries(new FormData($('connect-form'))); p.port = Number(p.port); p.host = p.host.trim(); p.username = p.username.trim(); p.name = p.name.trim();
   if (!p.host || !p.username || !p.name) { toast('请完整填写连接信息'); return null; }
   if ($('auth').value === 'password') { p.keyPath = ''; p.passphrase = ''; } else { p.password = ''; if (!p.keyPath) { toast('请选择 SSH 私钥'); return null; } }
-  const profile = {id:editingProfile || crypto.randomUUID(),name:p.name,host:p.host,port:p.port,username:p.username,keyPath:p.keyPath,rememberPassword:$('auth').value === 'password' && $('remember-password').checked,lastUsed:profiles.find(x=>x.id===editingProfile)?.lastUsed||0};
+  const profile = {id:editingProfile || crypto.randomUUID(),name:p.name,host:p.host,port:p.port,username:p.username,keyPath:p.keyPath,initialDirectory:p.initialDirectory,rememberPassword:$('auth').value === 'password' && $('remember-password').checked,lastUsed:profiles.find(x=>x.id===editingProfile)?.lastUsed||0};
   const previous = profiles;
   if(profiles.some(p=>Number.isFinite(p.sortOrder)))profile.sortOrder=profiles.find(p=>p.id===profile.id)?.sortOrder ?? Math.max(-1,...profiles.map(p=>p.sortOrder??-1))+1;
   profiles = profiles.filter(x => x.id !== profile.id); profiles.push(profile);
@@ -365,7 +365,7 @@ function updateFilePanel() {
   const s = current(), available = s?.kind === 'ssh' && s.state === 'connected';
   fileFilter.set([]); fileEpoch++; $('files-hint').hidden = available; $('files-content').hidden = !available;
   renderTransfer();
-  if (!$('files').hidden && available) loadFiles(s.remotePath || '.');
+  if (!$('files').hidden && available) loadFiles(s.remotePath || s.connection?.initialDirectory || '.');
 }
 function completeTransfer(s, transfer) {
   transfer.state='completed';transfer.expiresAt=Date.now()+5000;
@@ -419,7 +419,7 @@ const fileFilter = setupFileFilter(entries => {
   const id=activeId; $('file-list').replaceChildren();
     for (const entry of entries) {
       const row = document.createElement('div'); row.className = 'file-row';
-      const open = document.createElement('button'); open.className = 'file-open'; open.title = entry.directory ? '打开目录' : '下载 ' + entry.name;
+      const open = document.createElement('button'); open.className = 'file-open'; open.title = entry.path;
       const icon = document.createElement('span'); icon.textContent = entry.directory ? '▱' : '≡';
       const name = document.createElement('b'); name.textContent = entry.name; open.append(icon,name);
       open.onclick = () => entry.directory ? loadFiles(entry.path) : fileAction('download',{path:entry.path});
@@ -437,7 +437,7 @@ async function loadFiles(path) {
   try {
     const result = await call('sftp',{id,op:'list',path});
     if (activeId !== id || epoch !== fileEpoch) return;
-    filePath = result.path; current().remotePath = filePath; $('remote-path').value = filePath; $('file-list').replaceChildren(); current().fileSummary = `${result.entries.length} 个项目`; renderTransfer();
+    filePath = result.path; current().remotePath = filePath; $('remote-path').value = filePath; $('remote-path').title = filePath; resizeRemotePath(); $('file-list').replaceChildren(); current().fileSummary = `${result.entries.length} 个项目`; renderTransfer();
     fileFilter.set(result.entries);
   } catch (e) { if (activeId === id && epoch === fileEpoch) { current().fileSummary = '读取失败：' + e.message; renderTransfer(); $('file-list').replaceChildren(); } }
 }
@@ -463,6 +463,10 @@ async function fileAction(op,args) {
 }
 function toggleFiles() { if($('files').hidden && innerWidth<1100) $('snippets').hidden=true; $('file-menu').hidePopover(); $('files').hidden = !$('files').hidden; updateFilePanel(); }
 $('files-close').onclick = () => { $('file-menu').hidePopover(); $('files').hidden = true; fileEpoch++; };
+function resizeRemotePath(){const field=$('remote-path');field.style.height='auto';field.style.height=Math.min(120,Math.max(54,field.scrollHeight+2))+'px';}
+new ResizeObserver(resizeRemotePath).observe($('path-form'));
+$('remote-path').oninput=resizeRemotePath;
+$('remote-path').onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();$('path-form').requestSubmit();}};
 $('path-form').onsubmit = e => { e.preventDefault(); loadFiles($('remote-path').value); };
 $('parent-dir').onclick = () => loadFiles(filePath.replace(/\/[^/]+\/?$/,'') || '/');
 $('refresh').onclick = () => loadFiles(filePath);

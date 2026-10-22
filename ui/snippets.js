@@ -6,9 +6,9 @@ export function setupSnippets({paste,execute,save,confirm,report}) {
   const dialog = document.createElement('dialog'); dialog.id = 'snippet-dialog';
   dialog.innerHTML = '<form id="snippet-form"><div class="dialog-heading"><h2>代码块</h2><button type="button" id="snippet-cancel">×</button></div><label>代码<textarea id="snippet-code" required maxlength="100000" spellcheck="false" rows="10"></textarea></label><div class="dialog-actions"><button type="submit" class="primary">保存</button></div></form>';
   document.body.append(dialog);
-  let items = [];
+  let items = [], editingId = null;
   const $ = id => document.getElementById(id);
-  function add() { $('snippet-code').value = ''; dialog.showModal(); $('snippet-code').focus(); }
+  function add(item=null) { editingId=item?.id||null; $('snippet-code').value = item?.code||''; dialog.showModal(); $('snippet-code').focus(); }
   async function persist(next) {
     const old = items; items = next;
     try { await save(); render(); return true; } catch(e) { items = old; render(); report(e); return false; }
@@ -18,9 +18,10 @@ export function setupSnippets({paste,execute,save,confirm,report}) {
     if (!items.length) { const hint=document.createElement('p'); hint.className='panel-empty'; hint.textContent='暂无代码块'; list.append(hint); }
     for (const item of items) {
       const row = document.createElement('div'); row.className='snippet-row'; row.dataset.snippet=item.id;
-      const use = document.createElement('button'); use.className='snippet-use'; use.title='点击粘贴，长按拖动排序';
+      const use = document.createElement('button'); use.className='snippet-use'; use.title='点击粘贴，右键编辑，长按拖动排序';
       const code=document.createElement('pre'); code.textContent=item.code; use.append(code);
       use.onclick=()=>paste(item.code);
+      row.oncontextmenu=e=>{e.preventDefault();add(item);};
       const actions=document.createElement('div'); actions.className='snippet-actions';
       const run=document.createElement('button');run.className='snippet-run';run.textContent='执行';run.title='粘贴并回车执行';run.onclick=()=>execute(item.code);
       const remove=document.createElement('button'); remove.textContent='删除'; remove.onclick=async()=>{ if(await confirm('删除代码块？',item.code.slice(0,100))) await persist(items.filter(x=>x.id!==item.id)); };
@@ -33,8 +34,8 @@ export function setupSnippets({paste,execute,save,confirm,report}) {
   $('snippet-form').onsubmit=async e=>{
     e.preventDefault(); const code=$('snippet-code').value;
     if(!code.trim()) return;
-    const item={id:crypto.randomUUID(),title:code.trim().slice(0,100),code};
-    if(await persist([...items,item])) dialog.close();
+    const item={id:editingId||crypto.randomUUID(),title:code.trim().slice(0,100),code};
+    if(await persist(editingId?items.map(x=>x.id===editingId?item:x):[...items,item])) dialog.close();
   };
   return {get items(){return items;},load(value){items=Array.isArray(value)?value:[];render();},toggle(){panel.hidden=!panel.hidden;}};
 }

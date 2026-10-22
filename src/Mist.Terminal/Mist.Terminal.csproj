@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <AssemblyName>Terminal</AssemblyName>
-    <Version>1.5.2</Version>
+    <Version>1.5.3</Version>
     <ApplicationIcon>Assets\terminal.ico</ApplicationIcon>
   </PropertyGroup>
 

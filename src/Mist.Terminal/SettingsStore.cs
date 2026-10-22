@@ -47,7 +47,7 @@ internal sealed class SettingsStore(string path)
         foreach (var item in request["profiles"]!.AsArray())
         {
             var profile = new JsonObject();
-            foreach (var key in new[] { "id", "name", "host", "port", "username", "keyPath", "lastUsed", "sortOrder" }) profile[key] = item![key]?.DeepClone();
+            foreach (var key in new[] { "id", "name", "host", "port", "username", "keyPath", "lastUsed", "sortOrder", "initialDirectory" }) profile[key] = item![key]?.DeepClone();
             var old = previous.FirstOrDefault(x => Text(x, "id") == Text(profile, "id"));
             string cipher = old != null && Binding(old).SequenceEqual(Binding(profile)) ? Text(old,"passwordCipher") : "";
             if (credential != null && Text(credential, "id") == Text(profile, "id"))
