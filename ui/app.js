@@ -463,8 +463,16 @@ async function fileAction(op,args) {
 }
 function toggleFiles() { if($('files').hidden && innerWidth<1100) $('snippets').hidden=true; $('file-menu').hidePopover(); $('files').hidden = !$('files').hidden; updateFilePanel(); }
 $('files-close').onclick = () => { $('file-menu').hidePopover(); $('files').hidden = true; fileEpoch++; };
-function resizeRemotePath(){const field=$('remote-path');field.style.height='auto';field.style.height=Math.min(120,Math.max(54,field.scrollHeight+2))+'px';}
+function resizeRemotePath(){
+  const field=$('remote-path');
+  if(!field.getClientRects().length)return;
+  field.style.height='auto';
+  const style=getComputedStyle(field);
+  field.style.height=Math.ceil(field.scrollHeight+parseFloat(style.borderTopWidth)+parseFloat(style.borderBottomWidth))+'px';
+}
 new ResizeObserver(resizeRemotePath).observe($('path-form'));
+document.fonts.ready.then(resizeRemotePath);
+document.fonts.addEventListener('loadingdone',resizeRemotePath);
 $('remote-path').oninput=resizeRemotePath;
 $('remote-path').onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();$('path-form').requestSubmit();}};
 $('path-form').onsubmit = e => { e.preventDefault(); loadFiles($('remote-path').value); };

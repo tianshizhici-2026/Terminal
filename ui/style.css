@@ -35,6 +35,8 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 
 /* The viewport extends past the final whole terminal row after resizing. */
 .xterm .xterm-viewport{background-color:var(--terminal)}
+/* Terminal cells and xterm's repeated-glyph measurements need identical spacing. */
+.xterm{text-spacing-trim:space-all;text-autospace:no-autospace}
 
 /* Fit against the real content box; put fractional-row space above the grid. */
 .terminal-pane{inset:12px 12px 0;padding:0;display:flex;align-items:flex-end;overflow:hidden}
@@ -55,4 +57,4 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 
 .tab-label{user-select:none;touch-action:pan-x}.tab.sorting{background:#3b4541;box-shadow:inset 0 0 0 1px var(--accent)}.tab.sorting .tab-label{cursor:grabbing}
 
-#files #remote-path{font:14px/1.5 'JetBrains Mono',sans-serif;min-width:0;resize:none;white-space:pre-wrap;overflow-wrap:anywhere;background:#292b30;color:var(--text);border:1px solid #454850;border-radius:7px;max-height:120px}#path-form{align-items:center}#files .file-open b{font-size:16px;white-space:normal;overflow-wrap:anywhere;text-overflow:clip}#files .file-open span{flex-shrink:0}#files .file-row small{font-size:14px}
+#files #remote-path{font:14px/1.5 'JetBrains Mono',sans-serif;min-width:0;resize:none;white-space:pre-wrap;overflow-wrap:anywhere;background:#292b30;color:var(--text);border:1px solid #454850;border-radius:7px;overflow:hidden}#path-form{align-items:center;flex-shrink:0}#files-content{overflow-y:auto}#files .file-open b{font-size:16px;white-space:normal;overflow-wrap:anywhere;text-overflow:clip}#files .file-open span{flex-shrink:0}#files .file-row small{font-size:14px}
