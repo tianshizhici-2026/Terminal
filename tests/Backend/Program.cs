@@ -32,6 +32,12 @@ using(var remote = new SshSession("127.0.0.1", 22992, "mist-test", "test-only", 
   Console.WriteLine("PASS SFTP browsing remains available while transfer lock is held");
  }
  finally {remote.FileLock.Release();}
+ client.Disconnect();remote.ResetFileClient(false);
+ client=remote.Files;client.Connect();
+ using(var resumed=new MemoryStream()){client.DownloadFile("/roundtrip/renamed.bin",resumed);if(!payload.SequenceEqual(resumed.ToArray()))throw new Exception("Fresh transfer connection bytes differ");}
+ remote.ResetFileClient(true);remote.BrowserFiles.Connect();
+ if(!remote.BrowserFiles.ListDirectory("/roundtrip").Any(x=>x.Name=="renamed.bin"))throw new Exception("Fresh browser connection failed");
+ Console.WriteLine("PASS independent transfer/browser transport replacement after disconnect");
  client.DeleteFile("/roundtrip/renamed.bin");client.DeleteDirectory("/roundtrip");
  Console.WriteLine("PASS SFTP mkdir, upload, rename, list and byte-identical download (128 KiB)");
 }

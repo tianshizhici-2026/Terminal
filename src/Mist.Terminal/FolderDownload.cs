@@ -18,13 +18,7 @@ internal static class FolderDownload
             throw new IOException("文件名不兼容 Windows：" + name);
         return name;
     }
-    private static void NoLinks(string path)
-    {
-        for (var p = new DirectoryInfo(Path.GetFullPath(path)); p != null; p = p.Parent)
-            if (p.Exists && (p.Attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("下载位置不能包含目录链接。");
-        if ((File.Exists(path) || Directory.Exists(path)) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-            throw new IOException("下载位置不能是链接。");
-    }
+    private static void NoLinks(string path) => DownloadFiles.NoLinks(path);
     private static Entry[] Scan(SftpClient client, string root, CancellationToken token)
     {
         var entries = new List<Entry>();
@@ -44,22 +38,24 @@ internal static class FolderDownload
                 if (item.IsDirectory) Walk(remote.TrimEnd('/') + "/" + item.Name, path, depth + 1);
             }
         }
-        if (client.GetAttributes(root).IsSymbolicLink || !client.GetAttributes(root).IsDirectory) throw new IOException("远程路径不是文件夹。");
+        var attributes = client.GetAttributes(root);
+        if (attributes.IsSymbolicLink || !attributes.IsDirectory) throw new IOException("远程路径不是文件夹。");
         Walk(root, "", 0); return entries.ToArray();
     }
-    public static void Run(SftpClient client, string server, string remote, string destination, Action<long,long> progress, CancellationToken token = default)
+    public static string? Run(SftpClient client, string server, string remote, string destination, Action<long,long> progress, CancellationToken token = default, bool overwrite = false, bool restart = false)
     {
         destination = Path.GetFullPath(destination); NoLinks(destination);
-        if (Directory.Exists(destination) || File.Exists(destination)) throw new IOException("目标已存在，请选择其他保存位置；不会合并或覆盖文件夹。");
+        if (File.Exists(destination) || (Directory.Exists(destination) && !overwrite)) throw new IOException("目标已存在，请选择重新下载并覆盖，或其他保存位置。");
         string stage = destination + ".terminal.folder.part", info = stage + ".json", gate = stage + ".lock";
         foreach (var p in new[] {stage, info, gate}) NoLinks(p);
         using var ownership = new FileStream(gate, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
         var manifest = new Manifest(server, remote, Scan(client, remote, token));
         string serialized = JsonSerializer.Serialize(manifest);
+        if (restart) { DownloadFiles.DeleteStage(stage); File.Delete(info); }
         if (Directory.Exists(stage) || File.Exists(info))
         {
             if (!Directory.Exists(stage) || !File.Exists(info) || File.ReadAllText(info) != serialized)
-                throw new IOException("目录或服务器已变化，不能续传；请选择其他保存位置。");
+                throw new IOException("目录或服务器已变化，不能续传；请选择覆盖重下。");
             foreach (var p in Directory.EnumerateFileSystemEntries(stage)) NoLinks(p);
         }
         else
@@ -78,13 +74,26 @@ internal static class FolderDownload
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             string blob = Path.Combine(stage, i + ".data"), hashFile = blob + ".sha256";
             NoLinks(blob); NoLinks(hashFile);
-            string Hash() { using var f = File.OpenRead(blob); return Convert.ToHexString(SHA256.HashData(f)); }
-            if (!File.Exists(blob) || !File.Exists(hashFile) || new FileInfo(blob).Length != entry.Size || Hash() != File.ReadAllText(hashFile))
+            string Hash(string path)
             {
-                ResumableDownload.Run(client, server, remote.TrimEnd('/') + "/" + entry.Path, blob, (n, _) => progress(done+n,total), token);
-                File.WriteAllText(hashFile, Hash());
+                using var f = File.OpenRead(path);
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                var buffer = new byte[128 * 1024]; int count;
+                while ((count = f.Read(buffer)) > 0) { token.ThrowIfCancellationRequested(); hash.AppendData(buffer,0,count); }
+                return Convert.ToHexString(hash.GetHashAndReset());
             }
-            File.Copy(blob, target, true); done += entry.Size; progress(done,total);
+            string? savedHash = File.Exists(hashFile) ? File.ReadAllText(hashFile) : null;
+            if (File.Exists(target) && new FileInfo(target).Length == entry.Size && savedHash != null && Hash(target) == savedHash)
+            {
+                // Completed files are verified in place; never copy or download them again on resume.
+                File.Delete(blob); done += entry.Size; progress(done,total); continue;
+            }
+            if (!File.Exists(blob) || new FileInfo(blob).Length != entry.Size || savedHash == null || Hash(blob) != savedHash)
+            {
+                ResumableDownload.Run(client, server, remote.TrimEnd('/') + "/" + entry.Path, blob, (n, _) => progress(done+n,total), token, overwrite:true);
+                File.WriteAllText(hashFile, Hash(blob));
+            }
+            File.Move(blob, target, true); done += entry.Size; progress(done,total);
         }
         token.ThrowIfCancellationRequested();
         if (!manifest.Entries.SequenceEqual(Scan(client, remote, token))) throw new IOException("下载期间远程目录已变化；未生成完成目录。");
@@ -93,15 +102,18 @@ internal static class FolderDownload
         {
             foreach (var child in Directory.EnumerateFileSystemEntries(directory))
             {
+                token.ThrowIfCancellationRequested();
                 NoLinks(child);
                 if (!expectedPaths.Contains(Path.GetRelativePath(tree, child))) throw new IOException("临时目录包含未知文件，请选择其他保存位置。");
                 if (Directory.Exists(child)) VerifyTree(child);
             }
         }
         VerifyTree(tree);
-        Directory.Move(tree, destination);
+        token.ThrowIfCancellationRequested();
+        string? backup = DownloadFiles.PromoteDirectory(tree, destination, overwrite);
         // Delete only known checkpoint files, never recursively delete a supplied path.
         for (int i=0;i<manifest.Entries.Length;i++) if (!manifest.Entries[i].Directory) { File.Delete(Path.Combine(stage,i+".data")); File.Delete(Path.Combine(stage,i+".data.sha256")); }
         Directory.Delete(stage); File.Delete(info);
+        return backup;
     }
 }

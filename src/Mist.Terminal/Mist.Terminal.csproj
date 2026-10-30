@@ -7,7 +7,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <AssemblyName>Terminal</AssemblyName>
-    <Version>1.5.4</Version>
+    <StartupObject>Mist.Terminal.Program</StartupObject>
+    <Version>1.6.0</Version>
     <ApplicationIcon>Assets\terminal.ico</ApplicationIcon>
   </PropertyGroup>
 
@@ -15,6 +16,7 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" />
     <PackageReference Include="SSH.NET" Version="2026.0.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="www\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

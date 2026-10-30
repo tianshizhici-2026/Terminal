@@ -15,5 +15,5 @@ export function setupFileFilter(render) {
     current.postMessage({pattern:input.value,names:entries.map(x=>x.name)});
   }
   input.oninput=()=>{clearTimeout(debounce);debounce=setTimeout(apply,100);};
-  return {set(value){entries=value;clearTimeout(debounce);apply();}};
+  return {get pattern(){return input.value;},set(value,pattern=input.value){input.value=pattern;entries=value;clearTimeout(debounce);apply();}};
 }

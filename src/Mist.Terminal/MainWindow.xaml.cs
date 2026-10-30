@@ -12,10 +12,11 @@ public partial class MainWindow : Window
     private readonly ConcurrentDictionary<string, ITerminalSession> sessions = new();
     private readonly HashSet<string> opening = [];
     private readonly HashSet<string> cancelled = [];
-    private readonly Dictionary<string, CancellationTokenSource> downloads = new();
+    private readonly Dictionary<string, (CancellationTokenSource Cancellation, string TransferId, TaskCompletionSource Completion)> downloads = new();
     private readonly Dictionary<(string Id, string Path), string> downloadDestinations = new();
     private readonly string dataDir = Environment.GetEnvironmentVariable("TERMINAL_DATA_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Terminal");
     private bool closing;
+    private AppUpdates? updates;
     private static readonly JsonSerializerOptions json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     public MainWindow()
     {
@@ -26,6 +27,8 @@ public partial class MainWindow : Window
             try
             {
                 Directory.CreateDirectory(dataDir);
+                updates = new AppUpdates(dataDir);
+                updates.Changed += status => Send(new { type = "update", status });
                 string previous = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MistTerminal");
                 foreach (var name in new[] { "settings.json", "known-hosts.json" })
                     if (Environment.GetEnvironmentVariable("TERMINAL_DATA_DIR") == null && !File.Exists(Path.Combine(dataDir, name)) && File.Exists(Path.Combine(previous, name))) File.Copy(Path.Combine(previous, name), Path.Combine(dataDir, name));
@@ -47,7 +50,8 @@ public partial class MainWindow : Window
         {
             if ((sessions.Count > 0 || opening.Count > 0) && !ConfirmWindow.Ask(this, "退出 Terminal？", "所有终端连接及正在运行的任务将结束。", "退出")) { e.Cancel = true; return; }
             closing = true;
-            foreach (var download in downloads.Values) download.Cancel();
+            updates?.Dispose();
+            foreach (var download in downloads.Values) download.Cancellation.Cancel();
             foreach (var session in sessions.Values) _ = Task.Run(session.Dispose);
             sessions.Clear(); Web.Dispose();
         };
@@ -92,6 +96,17 @@ public partial class MainWindow : Window
         string id = S(p, "id");
         switch (action)
         {
+            case "updateStatus": return updates?.Status;
+            case "updateCheck":
+                if (updates != null) _ = updates.CheckAsync(manual: true);
+                return updates?.Status;
+            case "updateAutomatic":
+                updates?.SetAutomatic(S(p, "enabled") == "yes");
+                if (updates != null) _ = updates.CheckAsync();
+                return updates?.Status;
+            case "ready":
+                if (updates != null) _ = updates.CheckAsync();
+                return updates?.Status;
             case "load": return new SettingsStore(Path.Combine(dataDir, "settings.json")).LoadForUi();
             case "password": return new SettingsStore(Path.Combine(dataDir, "settings.json")).GetPassword(id);
             case "save":
@@ -126,10 +141,13 @@ public partial class MainWindow : Window
                 else if (!opening.Contains(id)) Send(new { type = "exit", id });
                 return null;
             case "close":
-                if (downloads.TryGetValue(id, out var download)) download.Cancel();
+                downloads.TryGetValue(id, out var download);
+                download.Cancellation?.Cancel();
                 foreach (var key in downloadDestinations.Keys.Where(x => x.Id == id).ToArray()) downloadDestinations.Remove(key);
                 if (opening.Contains(id)) cancelled.Add(id);
-                if (sessions.TryRemove(id, out var removed)) await Task.Run(removed.Dispose);
+                sessions.TryRemove(id, out var removed);
+                if (download.Completion != null) await download.Completion.Task;
+                if (removed != null) await Task.Run(removed.Dispose);
                 return null;
             case "copy": await ClipboardAccess.WriteAsync(new System.Windows.Interop.WindowInteropHelper(this).Handle, S(p, "text")); return null;
             case "paste": return await ClipboardAccess.ReadAsync(new System.Windows.Interop.WindowInteropHelper(this).Handle);
@@ -137,7 +155,7 @@ public partial class MainWindow : Window
                 var keyDialog = new OpenFileDialog { Title = "选择 SSH 私钥", Filter = "所有文件|*.*" };
                 return keyDialog.ShowDialog(this) == true ? keyDialog.FileName : null;
             case "pauseDownload":
-                if (downloads.TryGetValue(id, out var running)) running.Cancel();
+                if (downloads.TryGetValue(id, out var running) && (S(p,"transferId").Length == 0 || running.TransferId == S(p,"transferId"))) running.Cancellation.Cancel();
                 return null;
             case "sftp": return await FileOperation(id, p);
             default: throw new InvalidOperationException("不支持的操作");
@@ -160,6 +178,8 @@ public partial class MainWindow : Window
     {
         if (!sessions.TryGetValue(id, out var session) || session is not SshSession remote) throw new InvalidOperationException("请先连接 SSH 会话");
         string op = S(p, "op"), path = S(p, "path", "."), local = "";
+        bool overwrite = S(p,"overwrite") == "yes", restart = S(p,"restart") == "yes";
+        string transferId = S(p,"transferId");
         if (op == "upload")
         {
             var dialog = new OpenFileDialog { Title = "选择上传文件" };
@@ -169,7 +189,7 @@ public partial class MainWindow : Window
         if (op is "download" or "prepareDownload")
         {
             if (op == "download" && downloads.ContainsKey(id)) throw new InvalidOperationException("当前会话已有下载任务。");
-            if (op == "download" && S(p,"destination") is { Length: > 0 } destination) local = destination;
+            if (S(p,"destination") is { Length: > 0 } destination) local = destination;
             else if (S(p, "resume") == "yes" && downloadDestinations.TryGetValue((id, path), out var saved)) local = saved;
             else if (S(p, "directory") == "yes")
             {
@@ -179,15 +199,26 @@ public partial class MainWindow : Window
             }
             else
             {
-                var dialog = new SaveFileDialog { FileName = path.Split('/').Last(), Title = "下载 / 续传" };
+                var dialog = new SaveFileDialog { FileName = path.Split('/').Last(), Title = restart ? "重新下载并覆盖" : "下载 / 续传", OverwritePrompt = false };
                 if (dialog.ShowDialog(this) != true) return new { cancelled = true };
                 local = dialog.FileName;
             }
             downloadDestinations[(id, path)] = local;
-            if (op == "prepareDownload") return new { prepared = true, destination = local };
+            if (op == "prepareDownload" || S(p,"destination").Length == 0)
+            {
+                if (restart || File.Exists(local) || Directory.Exists(local))
+                {
+                    string message = restart ? "将丢弃此位置的旧断点，从头下载。" : "此位置已存在同名内容。";
+                    message += S(p,"directory") == "yes" ? "\n目标文件夹将整体替换，不合并；下载完成前保留原目录。" : "\n下载完成后替换原文件；中断时保留原文件。";
+                    if (!ConfirmWindow.Ask(this, "确认下载并覆盖？", message, "下载并覆盖", local)) return new { cancelled = true };
+                    overwrite = true;
+                }
+                if (op == "prepareDownload") return new { prepared = true, destination = local, overwrite = overwrite ? "yes" : "no" };
+            }
         }
         using var cancellation = new CancellationTokenSource();
-        if (op == "download") downloads.Add(id, cancellation);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (op == "download") downloads.Add(id, (cancellation, transferId, completion));
         var operationLock = op == "list" ? remote.BrowseLock : remote.FileLock;
         bool locked = false;
         try
@@ -212,10 +243,14 @@ public partial class MainWindow : Window
                 }
                 else if (op == "download")
                 {
-                    if (S(p, "directory") == "yes") FolderDownload.Run(client, remote.FileIdentity, path, local,
-                        (done, total) => Send(new { type = "transfer", id, done, total }), cancellation.Token);
+                    if (S(p, "directory") == "yes")
+                    {
+                        string? backup = FolderDownload.Run(client, remote.FileIdentity, path, local,
+                            (done, total) => Send(new { type = "transfer", id, transferId, done, total }), cancellation.Token, overwrite, restart);
+                        return new { success = true, backup };
+                    }
                     else ResumableDownload.Run(client, remote.FileIdentity, path, local,
-                        (done, total) => Send(new { type = "transfer", id, done, total }), cancellation.Token);
+                        (done, total) => Send(new { type = "transfer", id, transferId, done, total }), cancellation.Token, overwrite, restart);
                 }
                 else if (op == "mkdir") client.CreateDirectory(path);
                 else if (op == "rename") client.RenameFile(path, S(p, "destination"));
@@ -224,10 +259,16 @@ public partial class MainWindow : Window
             });
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { return new { paused = true }; }
+        catch (Exception ex) when (ex is Renci.SshNet.Common.SshConnectionException or Renci.SshNet.Common.SshOperationTimeoutException or ObjectDisposedException)
+        {
+            await Task.Run(() => remote.ResetFileClient(op == "list"));
+            throw;
+        }
         finally
         {
             if (op == "download") downloads.Remove(id);
             if (locked) operationLock.Release();
+            completion.TrySetResult();
         }
     }
 }

@@ -13,7 +13,7 @@ void Reject(Action action, string message) { try { action(); } catch (IOExceptio
 void Pause(SftpClient client, string target)
 {
     using var cancel = new CancellationTokenSource();
-    try { ResumableDownload.Run(client, identity, remotePath, target, (done, _) => { if (done > 0) cancel.Cancel(); }, cancel.Token); }
+    try { ResumableDownload.Run(client, identity, remotePath, target, (done, _) => { if (done > 0) cancel.Cancel(); }, cancel.Token, overwrite:true); }
     catch (OperationCanceledException) { return; }
     throw new Exception("Pause was ignored");
 }
@@ -30,13 +30,13 @@ try
     Check(File.Exists(target + ".terminal.part.json"), "Checkpoint missing");
     Console.WriteLine("PASS pause preserves checkpoint and existing destination");
 
-    Reject(() => ResumableDownload.Run(source, "another-server", remotePath, target, (_, _) => {}), "reject a different server identity");
+    Reject(() => ResumableDownload.Run(source, "another-server", remotePath, target, (_, _) => {}, overwrite:true), "reject a different server identity");
     using (var gate = new FileStream(target + ".terminal.part.lock", FileMode.OpenOrCreate, FileAccess.Write, FileShare.None))
-        Reject(() => ResumableDownload.Run(source, identity, remotePath, target, (_, _) => {}), "reject concurrent destination writers");
+        Reject(() => ResumableDownload.Run(source, identity, remotePath, target, (_, _) => {}, overwrite:true), "reject concurrent destination writers");
     using (var reconnected = Connect())
     {
         long resumed = -1;
-        ResumableDownload.Run(reconnected, identity, remotePath, target, (done, _) => { if (resumed < 0) resumed = done; });
+        ResumableDownload.Run(reconnected, identity, remotePath, target, (done, _) => { if (resumed < 0) resumed = done; }, overwrite:true);
         Check(resumed == offset, "Did not resume at the saved offset");
     }
     Check(payload.SequenceEqual(File.ReadAllBytes(target)), "Resumed bytes differ");
@@ -59,6 +59,19 @@ try
     using (var replacement = new MemoryStream(new byte[] {1,2,3})) source.UploadFile(replacement, remotePath);
     Reject(() => ResumableDownload.Run(source, identity, remotePath, changed, (_, _) => {}), "reject changed remote file without replacing destination");
     Check(!File.Exists(changed), "Changed source was promoted to final file");
+
+    ResumableDownload.Run(source, identity, remotePath, changed, (_, _) => {}, overwrite:true, restart:true);
+    Check(File.ReadAllBytes(changed).SequenceEqual(new byte[]{1,2,3}), "Explicit restart did not replace changed source checkpoint");
+    File.WriteAllText(changed, "keep until complete");
+    Reject(()=>ResumableDownload.Run(source,identity,remotePath,changed,(_,_)=>{}),"existing file requires overwrite approval");
+    using(var cancel=new CancellationTokenSource())
+    {
+        try{ResumableDownload.Run(source,identity,remotePath,changed,(n,_)=>{if(n>0)cancel.Cancel();},cancel.Token,overwrite:true,restart:true);}catch(OperationCanceledException){}
+    }
+    Check(File.ReadAllText(changed)=="keep until complete","Cancelled overwrite destroyed old file");
+    ResumableDownload.Run(source,identity,remotePath,changed,(_,_)=>{},overwrite:true);
+    Check(File.ReadAllBytes(changed).SequenceEqual(new byte[]{1,2,3}),"Overwrite retry was not byte identical");
+    Console.WriteLine("PASS explicit restart, approved replacement, interrupted overwrite preserves original");
 
     string orphan = Path.Combine(folder, "orphan.bin");
     File.WriteAllText(orphan + ".terminal.part", "unrelated data");
@@ -105,6 +118,40 @@ try
         }
         using(var stream=new MemoryStream(new byte[]{1,2,3}))source.UploadFile(stream,remoteFolder+"/nested/data.bin");
         Reject(()=>FolderDownload.Run(source,identity,remoteFolder,modified,(_,_)=>{}),"changed folder rejects resume");
+        FolderDownload.Run(source,identity,remoteFolder,modified,(_,_)=>{},restart:true);
+        Check(File.ReadAllBytes(Path.Combine(modified,"nested","data.bin")).SequenceEqual(new byte[]{1,2,3}),"Folder explicit restart failed");
+        File.WriteAllText(Path.Combine(folderTarget,"old-only.txt"),"original");
+        Reject(()=>DownloadFiles.PromoteDirectory(Path.Combine(folder,"missing-stage"),folderTarget,true),"failed folder promotion rolls back original");
+        Check(File.ReadAllText(Path.Combine(folderTarget,"old-only.txt"))=="original","Rollback lost old folder");
+        using(var cancel=new CancellationTokenSource())
+        {
+            try{FolderDownload.Run(source,identity,remoteFolder,folderTarget,(n,_)=>{if(n>0)cancel.Cancel();},cancel.Token,overwrite:true,restart:true);}catch(OperationCanceledException){}
+        }
+        Check(File.Exists(Path.Combine(folderTarget,"old-only.txt")),"Partial folder overwrite destroyed original");
+        FolderDownload.Run(source,identity,remoteFolder,folderTarget,(_,_)=>{},overwrite:true);
+        Check(!File.Exists(Path.Combine(folderTarget,"old-only.txt")),"Folder overwrite merged old contents");
+        Check(File.ReadAllBytes(Path.Combine(folderTarget,"nested","data.bin")).SequenceEqual(new byte[]{1,2,3}),"Folder replacement bytes differ");
+        Console.WriteLine("PASS folder restart and staged overwrite preserve original until completion");
+
+        using(var stream=new MemoryStream(payload))source.UploadFile(stream,remoteFolder+"/nested/data.bin");
+        using(var stream=new MemoryStream(payload.AsSpan(0,256*1024).ToArray()))source.UploadFile(stream,remoteFolder+"/a-first.bin");
+        try
+        {
+            string efficient=Path.Combine(folder,"efficient");
+            using(var cancel=new CancellationTokenSource())
+            {
+                try{FolderDownload.Run(source,identity,remoteFolder,efficient,(n,_)=>{if(n>256*1024)cancel.Cancel();},cancel.Token);}catch(OperationCanceledException){}
+            }
+            string first=Path.Combine(efficient+".terminal.folder.part","tree","a-first.bin");
+            Check(File.Exists(first),"Completed file was not staged in place");
+            var stamp=new DateTime(2020,1,1,0,0,0,DateTimeKind.Utc);File.SetLastWriteTimeUtc(first,stamp);
+            var watch=System.Diagnostics.Stopwatch.StartNew();
+            FolderDownload.Run(source,identity,remoteFolder,efficient,(_,_)=>{});
+            Check(File.GetLastWriteTimeUtc(Path.Combine(efficient,"a-first.bin"))==stamp,"Resume recopied a completed file");
+            Check(payload.SequenceEqual(File.ReadAllBytes(Path.Combine(efficient,"nested","data.bin"))),"Optimized folder bytes differ");
+            Console.WriteLine($"PASS completed file verified in place without re-copy; resumed folder in {watch.ElapsedMilliseconds} ms (loopback)");
+        }
+        finally{source.DeleteFile(remoteFolder+"/a-first.bin");}
         foreach(var name in new[]{"..","CON","a/b","a\\b","file.","NUL.txt"})Reject(()=>FolderDownload.SafeName(name),"invalid Windows name: "+name);
     }
     finally{source.DeleteFile(remoteFolder+"/nested/data.bin");source.DeleteFile(remoteFolder+"/zero");source.DeleteDirectory(remoteFolder+"/nested");source.DeleteDirectory(remoteFolder+"/empty");source.DeleteDirectory(remoteFolder);}

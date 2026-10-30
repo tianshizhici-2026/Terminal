@@ -7,8 +7,10 @@ namespace Mist.Terminal;
 internal sealed class SshSession : ITerminalSession
 {
     private readonly SshClient ssh;
-    private readonly SftpClient sftp;
-    private readonly SftpClient browser;
+    private SftpClient sftp;
+    private SftpClient browser;
+    private readonly Func<SftpClient> newFileClient;
+    private readonly object lifetime = new();
     private ShellStream? shell;
     private readonly List<PrivateKeyFile> keys = [];
     private bool disposed;
@@ -35,13 +37,16 @@ internal sealed class SshSession : ITerminalSession
             else method = new PasswordAuthenticationMethod(username, password);
             return new ConnectionInfo(host, port, username, method) { Timeout = TimeSpan.FromSeconds(20) };
         }
-        ssh = new SshClient(Info()); sftp = new SftpClient(Info()); browser = new SftpClient(Info());
+        newFileClient = () => {
+            var client = new SftpClient(Info());
+            client.HostKeyReceived += (_, e) => { e.CanTrust = verify(e.FingerPrintSHA256); if (e.CanTrust) fingerprint = e.FingerPrintSHA256; };
+            client.OperationTimeout = TimeSpan.FromSeconds(30);
+            client.KeepAliveInterval = TimeSpan.FromSeconds(30);
+            return client;
+        };
+        ssh = new SshClient(Info()); sftp = newFileClient(); browser = newFileClient();
         ssh.HostKeyReceived += (_, e) => e.CanTrust = verify(e.FingerPrintSHA256);
-        sftp.HostKeyReceived += (_, e) => { e.CanTrust = verify(e.FingerPrintSHA256); if (e.CanTrust) fingerprint = e.FingerPrintSHA256; };
-        browser.HostKeyReceived += (_, e) => e.CanTrust = verify(e.FingerPrintSHA256);
-        browser.OperationTimeout = TimeSpan.FromSeconds(30);
         ssh.KeepAliveInterval = TimeSpan.FromSeconds(30);
-        sftp.OperationTimeout = TimeSpan.FromSeconds(30);
     }
     public void Connect(int cols, int rows, Action<string> onData, Action onExit)
     {
@@ -82,8 +87,21 @@ internal sealed class SshSession : ITerminalSession
     }
     public void Dispose()
     {
-        if (disposed) return; disposed = true;
-        shell?.Dispose(); ssh.Dispose(); sftp.Dispose(); browser.Dispose();
-        foreach (var key in keys) key.Dispose();
+        lock (lifetime)
+        {
+            if (disposed) return; disposed = true;
+            shell?.Dispose(); ssh.Dispose(); sftp.Dispose(); browser.Dispose();
+            foreach (var key in keys) key.Dispose();
+        }
+    }
+    // Called while holding the corresponding operation lock. Retry starts with a fresh transport.
+    public void ResetFileClient(bool browsing)
+    {
+        lock (lifetime)
+        {
+            if (disposed) return;
+            if (browsing) { browser.Dispose(); browser = newFileClient(); }
+            else { sftp.Dispose(); sftp = newFileClient(); }
+        }
     }
 }
