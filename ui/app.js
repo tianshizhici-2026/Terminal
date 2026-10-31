@@ -34,6 +34,8 @@ let activeId = null, profiles = [], fontSize = 14, editingProfile = null, connec
 const fileBusy = new Set();
 const current = () => sessions.get(activeId);
 let fileSession=null, displayedFileSession=null;
+const fileServers=new Map();
+const fileServerKey=s=>JSON.stringify([s.connection.username,s.connection.host.trim().toLowerCase(),Number(s.connection.port)||22]);
 const fileCurrent=()=>fileSession && sessions.get(fileSession.id)===fileSession ? fileSession : null;
 const fonts = {'JetBrains Mono':'"JetBrains Mono"','Consolas':'Consolas','SimHei':'SimHei, "黑体"','FangSong':'FangSong, "仿宋"'};
 let fontFamily = 'JetBrains Mono';
@@ -370,8 +372,17 @@ $('file-server').onchange=()=>{fileSession=sessions.get($('file-server').value)|
 $('file-reconnect').onclick=()=>{const s=fileCurrent();if(s)repeatSession(s,true).catch(report);};
 function updateFilePanel() {
   const servers=[...sessions.values()].filter(s=>s.kind==='ssh');
-  if(!fileCurrent())fileSession=current()?.kind==='ssh'?current():servers[0]||null;
-  const select=$('file-server'), options=servers.map(s=>({id:s.id,label:`${s.name} · ${s.connection.username}@${s.connection.host}${s.state==='connected'?'':' · 未连接'}`}));
+  const groups=new Map();
+  for(const s of servers){const key=fileServerKey(s);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(s);}
+  for(const key of fileServers.keys())if(!groups.has(key))fileServers.delete(key);
+  for(const [key,group] of groups){
+    // Keep each server's chosen session stable so tab changes cannot hide its transfer queue.
+    const previous=fileServers.get(key);
+    fileServers.set(key,group.includes(fileCurrent())?fileCurrent():group.includes(previous)?previous:group.find(s=>s.state==='connected')||group[0]);
+  }
+  if(!fileCurrent())fileSession=(fileSession && fileServers.get(fileServerKey(fileSession))) ||
+    (current()?.kind==='ssh' && fileServers.get(fileServerKey(current()))) || fileServers.values().next().value || null;
+  const select=$('file-server'), options=[...fileServers.values()].map(s=>({id:s.id,label:`${s.name} · ${s.connection.username}@${s.connection.host}${Number(s.connection.port)&&Number(s.connection.port)!==22?':'+s.connection.port:''}${s.state==='connected'?'':' · 未连接'}`}));
   const key=JSON.stringify(options);
   if(select.dataset.options!==key){select.replaceChildren(...options.map(o=>new Option(o.label,o.id)));select.dataset.options=key;}
   const s=fileCurrent();select.value=s?.id||'';select.disabled=!servers.length;

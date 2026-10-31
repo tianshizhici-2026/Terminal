@@ -8,7 +8,7 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>Terminal</AssemblyName>
     <StartupObject>Mist.Terminal.Program</StartupObject>
-    <Version>1.6.0</Version>
+    <Version>1.6.1</Version>
     <ApplicationIcon>Assets\terminal.ico</ApplicationIcon>
   </PropertyGroup>
 

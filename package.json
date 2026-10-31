@@ -1,6 +1,6 @@
 {
   "name": "terminal-desktop",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "A calm Windows terminal with SSH and SFTP",
   "main": "index.js",
   "scripts": {
