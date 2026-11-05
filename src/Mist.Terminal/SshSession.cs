@@ -10,6 +10,7 @@ internal sealed class SshSession : ITerminalSession
     private SftpClient sftp;
     private SftpClient browser;
     private readonly Func<SftpClient> newFileClient;
+    private readonly Func<SftpClient> newEditorClient;
     private readonly object lifetime = new();
     private ShellStream? shell;
     private readonly List<PrivateKeyFile> keys = [];
@@ -26,26 +27,30 @@ internal sealed class SshSession : ITerminalSession
     public SshSession(string host, int port, string username, string password, string keyPath, string passphrase, Func<string, bool> verify)
     {
         endpoint = System.Text.Json.JsonSerializer.Serialize(new { host = host.ToLowerInvariant(), port, username });
-        ConnectionInfo Info()
+        ConnectionInfo Info(List<PrivateKeyFile>? owned = null)
         {
             AuthenticationMethod method;
             if (!string.IsNullOrWhiteSpace(keyPath))
             {
                 var key = string.IsNullOrEmpty(passphrase) ? new PrivateKeyFile(keyPath) : new PrivateKeyFile(keyPath, passphrase);
-                keys.Add(key); method = new PrivateKeyAuthenticationMethod(username, key);
+                (owned ?? keys).Add(key); method = new PrivateKeyAuthenticationMethod(username, key);
             }
             else method = new PasswordAuthenticationMethod(username, password);
             return new ConnectionInfo(host, port, username, method) { Timeout = TimeSpan.FromSeconds(20) };
         }
-        newFileClient = () => {
-            var client = new SftpClient(Info());
+        void Configure(SftpClient client)
+        {
             client.HostKeyReceived += (_, e) => { e.CanTrust = verify(e.FingerPrintSHA256); if (e.CanTrust) fingerprint = e.FingerPrintSHA256; };
             client.OperationTimeout = TimeSpan.FromSeconds(30);
             client.KeepAliveInterval = TimeSpan.FromSeconds(30);
-            return client;
+        }
+        newFileClient = () => { var client = new SftpClient(Info()); Configure(client); return client; };
+        newEditorClient = () => {
+            var owned = new List<PrivateKeyFile>();
+            var client = new EditorSftpClient(Info(owned), owned); Configure(client); return client;
         };
         ssh = new SshClient(Info()); sftp = newFileClient(); browser = newFileClient();
-        ssh.HostKeyReceived += (_, e) => e.CanTrust = verify(e.FingerPrintSHA256);
+        ssh.HostKeyReceived += (_, e) => { e.CanTrust = verify(e.FingerPrintSHA256); if (e.CanTrust) fingerprint = e.FingerPrintSHA256; };
         ssh.KeepAliveInterval = TimeSpan.FromSeconds(30);
     }
     public void Connect(int cols, int rows, Action<string> onData, Action onExit)
@@ -78,6 +83,22 @@ internal sealed class SshSession : ITerminalSession
         if (disposed || !ssh.IsConnected || shell == null) { ReportExit(); return; }
         try { shell.Write(data); shell.Flush(); }
         catch { ReportExit(); }
+    }
+    public SftpClient CreateEditorClient()
+    {
+        lock (lifetime)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            return newEditorClient();
+        }
+    }
+    private sealed class EditorSftpClient(ConnectionInfo info, List<PrivateKeyFile> owned) : SftpClient(info)
+    {
+        protected override void Dispose(bool disposing)
+        {
+            try { base.Dispose(disposing); }
+            finally { if (disposing) foreach (var key in owned) key.Dispose(); }
+        }
     }
     public void Resize(int cols, int rows)
     {

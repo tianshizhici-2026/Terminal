@@ -6,6 +6,7 @@ const {spawn,execFileSync}=require('node:child_process');
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 (async()=>{
  const archive=path.resolve(process.argv[2]),feed=path.resolve(process.argv[3]);
+ const oldVersion=process.env.TEST_OLD_VERSION||'0.0.1';
  const target=JSON.parse(fs.readFileSync(path.join(feed,'releases.lite-win-x64.json'),'utf8')).Assets[0].Version;
  const root=fs.mkdtempSync(path.resolve('artifacts/native-update-')),install=path.join(root,'app'),profile=path.join(root,'profile');
  fs.mkdirSync(profile);fs.writeFileSync(path.join(profile,'updates.json'),JSON.stringify({Automatic:false}));
@@ -24,17 +25,17 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
  let browser;
  try{
   launch();let connection=await connect();browser=connection.browser;let page=connection.page;
-  expect((await call(page,'updateStatus')).version).toBe('0.0.1');
+  expect((await call(page,'updateStatus')).version).toBe(oldVersion);
   await page.evaluate(()=>terminalAction('connections'));await page.locator('#new-menu summary').click();await page.locator('#new-local').click();
   await expect(page.locator('#status')).toContainText('本地');
   const originalPid=processIds();
-  execFileSync('dotnet',['run','--project','tests/Updates','--','--prepare',feed,path.join(install,'packages')],{windowsHide:true,stdio:'inherit'});
+  if(process.env.TEST_PUBLIC_UPDATE!=='1')execFileSync('dotnet',['run','--project','tests/Updates','--','--prepare',feed,path.join(install,'packages')],{windowsHide:true,stdio:'inherit'});
   await call(page,'updateCheck');
-  await expect.poll(async()=>(await call(page,'updateStatus')).state).toBe('ready');
+  await expect.poll(async()=>(await call(page,'updateStatus')).state,{timeout:90000}).toBe('ready');
   await page.evaluate(()=>terminalAction('settings'));await expect(page.locator('#update-status')).toContainText('下次启动更新');await expect(page.locator('#check-update')).toBeDisabled();await page.locator('[data-close="settings-dialog"]').click();
   launch();await pause(1200);
   expect(processIds()).toBe(originalPid);await expect(page.locator('#status')).toContainText('本地');
-  expect((await call(page,'updateStatus')).version).toBe('0.0.1');
+  expect((await call(page,'updateStatus')).version).toBe(oldVersion);
   console.log('PASS staged update and repeated launch preserve the running terminal session');
   await page.evaluate(async()=>{await Promise.all([...document.querySelectorAll('.terminal-pane')].map(p=>new Promise(resolve=>{const request=crypto.randomUUID();const receive=({data:m})=>{if(m.request===request){chrome.webview.removeEventListener('message',receive);resolve();}};chrome.webview.addEventListener('message',receive);chrome.webview.postMessage({action:'close',id:p.dataset.session,request});})));});
   close();await browser.close();browser=null;
@@ -49,7 +50,7 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const packages=fs.readdirSync(path.join(install,'packages')).filter(name=>name.endsWith('.nupkg'));
   expect(packages.length).toBeGreaterThan(0);expect(packages.every(name=>name.includes(target))).toBe(true);
   await page.screenshot({path:path.join(root,'updated.png')});
-  console.log(`PASS native ZIP update 0.0.1 -> ${target}, stable launcher, obsolete-file cleanup and preserved settings`);
+  console.log(`PASS native ZIP update ${oldVersion} -> ${target}, stable launcher, obsolete-file cleanup and preserved settings`);
   console.log(root);
  }finally{close();if(browser)await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -1,5 +1,6 @@
 import { setupSnippetSort } from './snippet-sort';
 import { keepCursorBlinking } from './cursor';
+import { preserveViewport } from './viewport-anchor';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
@@ -9,6 +10,7 @@ import { setupSnippets } from './snippets';
 import { setupDownloadQueue } from './download-queue';
 import { setupFileFilter } from './file-filter';
 import { setupUpdates } from './updates';
+import { setupRemoteEdits } from './remote-edits';
 
 const $ = id => document.getElementById(id);
 const bridge = window.chrome?.webview;
@@ -44,6 +46,7 @@ const decorations = {matchBackground:'#665320', matchBorder:'#e3bc51', matchOver
 const sftpSize = setupSftpResize($('files'), () => save().catch(report));
 const snippets = setupSnippets({paste:text=>pasteText(current(),text),execute:text=>executeSnippet(current(),text),save:()=>save(),confirm:confirmAction,report});
 const updates = setupUpdates({call,bridge,report});
+setupRemoteEdits({call,bridge,report});
 function save(credential) { return call('save', {fontSize, fontFamily, snippets:snippets.items, sftpWidth:sftpSize.width, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
 async function copySelection(s, quiet=false) {
   const text=s?.term.getSelection(), version=s?.selectionVersion;
@@ -94,7 +97,7 @@ function fit(s) {
   try {
     const dimensions=s.fit.proposeDimensions();
     // Keep a full spare cell for glyph overhang and scrollbar rounding at fractional DPI.
-    if(dimensions) s.term.resize(Math.max(2,dimensions.cols-1),dimensions.rows);
+    if(dimensions) preserveViewport(s.term,()=>s.term.resize(Math.max(2,dimensions.cols-1),dimensions.rows));
   } catch {}
 }
 function activate(id) {
@@ -184,11 +187,11 @@ async function closeSession(id) {
 }
 function setFont(value) {
   fontSize = Math.max(10,Math.min(28,value)); $('font-size').textContent = fontSize;
-  for (const s of sessions.values()) { s.term.options.fontSize = fontSize; fit(s); }
+  for (const s of sessions.values()) preserveViewport(s.term,()=>{s.term.options.fontSize=fontSize;fit(s);});
   clearTimeout(setFont.timer); setFont.timer = setTimeout(() => save().catch(report), 200);
 }
 for(const event of ['pointerup','pointercancel'])window.addEventListener(event,()=>{for(const s of sessions.values())if(s.selectionDragging){s.selectionDragging=false;}});
-window.addEventListener('wheel', e => { if (e.ctrlKey) { e.preventDefault(); if (e.deltaY || e.deltaX) setFont(fontSize + ((e.deltaY || e.deltaX) < 0 ? 1 : -1)); } }, {passive:false,capture:true});
+window.addEventListener('wheel', e => { if (e.ctrlKey) { e.preventDefault(); e.stopImmediatePropagation(); if (e.deltaY || e.deltaX) setFont(fontSize + ((e.deltaY || e.deltaX) < 0 ? 1 : -1)); } }, {passive:false,capture:true});
 new ResizeObserver(() => fit(current())).observe($('terminals'));
 window.addEventListener('resize',()=>{if(innerWidth<1100 && !$('files').hidden && !$('snippets').hidden)$('files').hidden=true;});
 bridge?.addEventListener('message', ({data:m}) => {
@@ -430,22 +433,28 @@ $('transfer-toggle').onclick=()=>{
   if(t.state==='running')downloadQueue.pause(s,t);
   else if(['paused','failed'].includes(t.state))downloadQueue.resume(s,t);
 };
-function openFileMenu(entry, id, row, x, y) {
+function showFileActions(actions, id, row, x, y) {
   const menu = $('file-menu'); menu.replaceChildren();
   const add = (label, action) => {
     const button = document.createElement('button'); button.role = 'menuitem'; button.textContent = label;
     button.onclick = () => { menu.hidePopover(); if (fileSession?.id === id) action(); };
     menu.append(button);
   };
-  add(entry.directory ? '打开文件夹' : '下载 / 续传', () => entry.directory ? loadFiles(entry.path) : fileAction('download',{path:entry.path}));
-  if(entry.directory)add('下载文件夹 / 续传',()=>fileAction('download',{path:entry.path,directory:'yes'}));
-  add('重新下载并覆盖…',()=>fileAction('download',{path:entry.path,directory:entry.directory?'yes':undefined,restart:'yes'}));
-  add('重命名', async () => { const name = await askText('重命名',entry.name); if (fileSession?.id === id && name && validFileName(name)) fileAction('rename',{path:entry.path,destination:entry.path.slice(0,entry.path.lastIndexOf('/')+1)+name}); });
+  for(const [label,action] of actions)add(label,action);
   menu.showPopover();
   const bounds = row.getBoundingClientRect();
   menu.style.left = Math.max(6,Math.min(x ?? bounds.right-160,innerWidth-menu.offsetWidth-6))+'px';
   menu.style.top = Math.max(6,Math.min(y ?? bounds.bottom,innerHeight-menu.offsetHeight-6))+'px';
   menu.firstElementChild.focus();
+}
+function openFileMenu(entry, id, row, x, y) {
+  const actions=[];const add=(label,action)=>actions.push([label,action]);
+  add(entry.directory ? '打开文件夹' : '下载 / 续传', () => entry.directory ? loadFiles(entry.path) : fileAction('download',{path:entry.path}));
+  if(!entry.directory)add('本地编辑',()=>fileAction('edit',{path:entry.path}));
+  if(entry.directory)add('下载文件夹 / 续传',()=>fileAction('download',{path:entry.path,directory:'yes'}));
+  add('重新下载并覆盖…',()=>fileAction('download',{path:entry.path,directory:entry.directory?'yes':undefined,restart:'yes'}));
+  add('重命名', async () => { const name = await askText('重命名',entry.name); if (fileSession?.id === id && name && validFileName(name)) fileAction('rename',{path:entry.path,destination:entry.path.slice(0,entry.path.lastIndexOf('/')+1)+name}); });
+  showFileActions(actions,id,row,x,y);
 }
 $('file-menu').onkeydown = e => {
   if (!['ArrowDown','ArrowUp','Home','End'].includes(e.key)) return;
@@ -495,8 +504,8 @@ async function fileAction(op,args) {
     const result = await call('sftp',{id,op,...args});
     if (result?.cancelled) s.transfer = previous;
     else if (result?.paused) s.transfer.state = 'paused';
-    else { if (isTransfer) completeTransfer(s,s.transfer); toast('文件操作已完成',5000); }
-    if (fileCurrent()===s && !result?.paused && !result?.cancelled && op !== 'download') await loadFiles(path);
+    else { if (isTransfer) completeTransfer(s,s.transfer); if(op!=='edit')toast('文件操作已完成',5000); }
+    if (fileCurrent()===s && !result?.paused && !result?.cancelled && !['download','edit'].includes(op)) await loadFiles(path);
   }
   catch (e) { if (isTransfer) { s.transfer.state = 'failed'; s.transfer.error = e.message; } report(e); }
   finally { fileBusy.delete(id); renderTransfer(); downloadQueue.pump(s); }
@@ -519,7 +528,15 @@ $('path-form').onsubmit = e => { e.preventDefault(); loadFiles($('remote-path').
 $('parent-dir').onclick = () => loadFiles(filePath.replace(/\/[^/]+\/?$/,'') || '/');
 $('refresh').onclick = () => loadFiles(filePath);
 $('upload').onclick = () => fileAction('upload',{path:filePath});
-$('mkdir').onclick = async () => { const s=fileCurrent(),path=filePath;const name = await askText('新建远程文件夹',''); if (fileCurrent()===s && name && validFileName(name)) fileAction('mkdir',{path:path.replace(/\/$/,'')+'/'+name}); };
+$('mkdir').onclick = () => {
+  const s=fileCurrent(),id=s?.id,path=filePath;if(s?.state!=='connected')return;
+  const create=async(folder)=>{
+    const name=await askText(folder?'新建文件夹':'新建文件','');
+    if(fileCurrent()===s && s.id===id && name && validFileName(name))
+      fileAction(folder?'mkdir':'createFile',{path:path.replace(/\/$/,'')+'/'+name});
+  };
+  showFileActions([['文件',()=>create(false)],['文件夹',()=>create(true)]],id,$('mkdir'),$('mkdir').getBoundingClientRect().left);
+};
 function askText(title,value) { return new Promise(resolve => { $('text-title').textContent = title; $('text-value').value = value; let answer = null; $('text-form').onsubmit = e => { e.preventDefault(); answer = $('text-value').value.trim(); $('text-dialog').close(); }; $('text-dialog').addEventListener('close',() => resolve(answer),{once:true}); $('text-dialog').showModal(); $('text-value').select(); }); }
 function confirmAction(title,message) { return new Promise(resolve => { $('confirm-title').textContent = title; $('confirm-message').textContent = message; let answer = false; $('confirm-yes').onclick = () => { answer = true; $('confirm-dialog').close(); }; $('confirm-no').onclick = () => $('confirm-dialog').close(); $('confirm-dialog').addEventListener('close',() => resolve(answer),{once:true}); $('confirm-dialog').showModal(); }); }
 document.querySelectorAll('[data-close]').forEach(b => b.onclick = () => $(b.dataset.close).close());

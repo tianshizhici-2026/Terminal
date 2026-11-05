@@ -19,6 +19,14 @@ using(var remote = new SshSession("127.0.0.1", 22992, "mist-test", "test-only", 
  var client=remote.Files; client.Connect();
  var payload=RandomNumberGenerator.GetBytes(128*1024);
  client.CreateDirectory("/roundtrip");
+ RemoteFiles.CreateEmptyFile(client,"/roundtrip/new.txt");
+ if(client.GetAttributes("/roundtrip/new.txt").Size!=0)throw new Exception("New file is not empty");
+ using(var contents=new MemoryStream(Encoding.UTF8.GetBytes("keep existing content")))client.UploadFile(contents,"/roundtrip/new.txt");
+ try{RemoteFiles.CreateEmptyFile(client,"/roundtrip/new.txt");throw new Exception("Existing file replaced");}catch(System.IO.IOException){}
+ using(var contents=new MemoryStream()){client.DownloadFile("/roundtrip/new.txt",contents);if(Encoding.UTF8.GetString(contents.ToArray())!="keep existing content")throw new Exception("Create truncated existing file");}
+ try{RemoteFiles.CreateEmptyFile(client,"/roundtrip");throw new Exception("Existing directory replaced");}catch(System.IO.IOException){}
+ client.DeleteFile("/roundtrip/new.txt");
+ Console.WriteLine("PASS empty file creation, existing file bytes and existing directory preserved");
  using(var stream=new MemoryStream(payload)) client.UploadFile(stream,"/roundtrip/original.bin",false);
  client.RenameFile("/roundtrip/original.bin","/roundtrip/renamed.bin");
  if(!client.ListDirectory("/roundtrip").Any(x=>x.Name=="renamed.bin")) throw new Exception("Listing missing file");

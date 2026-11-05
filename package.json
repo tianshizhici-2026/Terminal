@@ -1,6 +1,6 @@
 {
   "name": "terminal-desktop",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "A calm Windows terminal with SSH and SFTP",
   "main": "index.js",
   "scripts": {
@@ -14,6 +14,8 @@
     "test:dialogs": "dotnet run --project tests/Dialogs",
     "test:transfers": "dotnet run --project tests/Transfers",
     "test:updates": "dotnet run --project tests/Updates",
+    "test:editing": "dotnet run --project tests/RemoteEditing",
+    "test:scroll": "npm run build && node tests/terminal-scroll-ui.cjs",
     "test:sftp-ui": "npm run build && node tests/sftp-ui.cjs",
     "test:productivity": "npm run build && node tests/productivity-ui.cjs",
     "test:clipboard": "dotnet run --project tests/Clipboard"

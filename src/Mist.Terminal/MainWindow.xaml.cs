@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     private readonly string dataDir = Environment.GetEnvironmentVariable("TERMINAL_DATA_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Terminal");
     private bool closing;
     private AppUpdates? updates;
+    private RemoteEditor? editor;
     private static readonly JsonSerializerOptions json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     public MainWindow()
     {
@@ -27,6 +28,8 @@ public partial class MainWindow : Window
             try
             {
                 Directory.CreateDirectory(dataDir);
+                editor = new RemoteEditor(Path.Combine(dataDir, "RemoteEdits"));
+                editor.Changed += () => Send(new { type = "remoteEdits", entries = editor.List() });
                 updates = new AppUpdates(dataDir);
                 updates.Changed += status => Send(new { type = "update", status });
                 string previous = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MistTerminal");
@@ -51,6 +54,7 @@ public partial class MainWindow : Window
             if ((sessions.Count > 0 || opening.Count > 0) && !ConfirmWindow.Ask(this, "退出 Terminal？", "所有终端连接及正在运行的任务将结束。", "退出")) { e.Cancel = true; return; }
             closing = true;
             updates?.Dispose();
+            editor?.Dispose();
             foreach (var download in downloads.Values) download.Cancellation.Cancel();
             foreach (var session in sessions.Values) _ = Task.Run(session.Dispose);
             sessions.Clear(); Web.Dispose();
@@ -129,7 +133,9 @@ public partial class MainWindow : Window
                         catch { remote.Dispose(); throw; }
                     });
                     if (closing || cancelled.Remove(id)) { created.Dispose(); return null; }
-                    sessions[id] = created; return new { connected = true };
+                    sessions[id] = created;
+                    if (created is SshSession connected) editor?.Attach(connected.FileIdentity, connected, connected.CreateEditorClient);
+                    return new { connected = true };
                 }
                 finally { opening.Remove(id); cancelled.Remove(id); }
             case "input":
@@ -146,6 +152,7 @@ public partial class MainWindow : Window
                 foreach (var key in downloadDestinations.Keys.Where(x => x.Id == id).ToArray()) downloadDestinations.Remove(key);
                 if (opening.Contains(id)) cancelled.Add(id);
                 sessions.TryRemove(id, out var removed);
+                if (removed != null && editor != null) await editor.DetachAsync(removed);
                 if (download.Completion != null) await download.Completion.Task;
                 if (removed != null) await Task.Run(removed.Dispose);
                 return null;
@@ -158,6 +165,21 @@ public partial class MainWindow : Window
                 if (downloads.TryGetValue(id, out var running) && (S(p,"transferId").Length == 0 || running.TransferId == S(p,"transferId"))) running.Cancellation.Cancel();
                 return null;
             case "sftp": return await FileOperation(id, p);
+            case "remoteEdits": return editor?.List();
+            case "remoteEditResolve":
+                var issue = editor?.List().FirstOrDefault(e => e.Id == id);
+                if (issue == null) return null;
+                if (issue.State == "waiting")
+                    ConfirmWindow.Ask(this, "文件尚未保存到服务器", "连接已断开，本地修改已保留，重连后自动保存。", "知道了", issue.RemotePath, false);
+                else if (issue.State == "conflict")
+                {
+                    string observed = editor!.ConflictToken(id);
+                    if (ConfirmWindow.Ask(this, "覆盖远端修改？", "远端文件已有其他修改，是否用本地内容覆盖？", "覆盖", issue.RemotePath))
+                        await editor.SyncAsync(id, true, observed);
+                }
+                else if (issue.State == "failed" && ConfirmWindow.Ask(this, "文件保存失败", "本地修改已保留。", "重试", issue.RemotePath + "\n" + issue.Error))
+                    await editor!.SyncAsync(id);
+                return null;
             default: throw new InvalidOperationException("不支持的操作");
         }
     }
@@ -178,6 +200,13 @@ public partial class MainWindow : Window
     {
         if (!sessions.TryGetValue(id, out var session) || session is not SshSession remote) throw new InvalidOperationException("请先连接 SSH 会话");
         string op = S(p, "op"), path = S(p, "path", "."), local = "";
+        if (op == "edit")
+        {
+            editor!.Attach(remote.FileIdentity, remote, remote.CreateEditorClient);
+            string editId = await editor.OpenAsync(remote.FileIdentity, path);
+            OpenWith.Show(new System.Windows.Interop.WindowInteropHelper(this).Handle, editor.LocalPath(editId));
+            return new { success = true };
+        }
         bool overwrite = S(p,"overwrite") == "yes", restart = S(p,"restart") == "yes";
         string transferId = S(p,"transferId");
         if (op == "upload")
@@ -253,6 +282,7 @@ public partial class MainWindow : Window
                         (done, total) => Send(new { type = "transfer", id, transferId, done, total }), cancellation.Token, overwrite, restart);
                 }
                 else if (op == "mkdir") client.CreateDirectory(path);
+                else if (op == "createFile") RemoteFiles.CreateEmptyFile(client, path);
                 else if (op == "rename") client.RenameFile(path, S(p, "destination"));
                 else throw new InvalidOperationException("不支持的文件操作");
                 return new { success = true };
