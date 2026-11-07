@@ -44,7 +44,12 @@ let fontFamily = 'JetBrains Mono';
 const theme = { background:'#2d2f34', foreground:'#edf0f5', cursor:'#d1f0da', cursorAccent:'#2d2f34', selectionBackground:'#445a78', selectionForeground:'#ffffff', selectionInactiveBackground:'#414c5e', black:'#737d8c', red:'#ff7885', green:'#82db70', yellow:'#f5ca57', blue:'#75adff', magenta:'#d18cff', cyan:'#4dd9df', white:'#e0e6ef', brightBlack:'#a5afbf', brightRed:'#ffa0a9', brightGreen:'#adf299', brightYellow:'#ffe293', brightBlue:'#a6caff', brightMagenta:'#e5b5ff', brightCyan:'#96f0ee', brightWhite:'#ffffff' };
 const decorations = {matchBackground:'#665320', matchBorder:'#e3bc51', matchOverviewRuler:'#e3bc51', activeMatchBackground:'#3f6652', activeMatchBorder:'#c7f0d4', activeMatchColorOverviewRuler:'#c7f0d4'};
 const sftpSize = setupSftpResize($('files'), () => save().catch(report));
-const snippets = setupSnippets({paste:text=>pasteText(current(),text),execute:text=>executeSnippet(current(),text),save:()=>save(),confirm:confirmAction,report});
+let snippetField = null;
+document.addEventListener('focusin',({target})=>{
+  if(target.closest('#snippets'))return;
+  snippetField=target.matches('#remote-path, #file-filter')?target:null;
+});
+const snippets = setupSnippets({paste:pasteSnippet,execute:text=>executeSnippet(current(),text),save:()=>save(),confirm:confirmAction,report});
 const updates = setupUpdates({call,bridge,report});
 setupRemoteEdits({call,bridge,report});
 function save(credential) { return call('save', {fontSize, fontFamily, snippets:snippets.items, sftpWidth:sftpSize.width, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
@@ -59,6 +64,16 @@ async function copySelection(s, quiet=false) {
   if(!quiet)toast('已复制');
 }
 function pasteText(s,text) { if(s?.state!=='connected'){toast('请先连接终端');return;} s.term.paste(text);s.term.focus(); }
+function pasteSnippet(text) {
+  const field=snippetField;
+  if(!field?.isConnected || !field.checkVisibility() || field.disabled || field.readOnly){pasteText(current(),text);return;}
+  const start=field.selectionStart, end=field.selectionEnd;
+  if(field instanceof HTMLInputElement)text=text.replace(/[\r\n]/g,'');
+  if(field.maxLength>=0)text=text.slice(0,Math.max(0,field.maxLength-field.value.length+end-start));
+  field.setRangeText(text,start,end,'end');
+  field.dispatchEvent(new Event('input',{bubbles:true}));
+  field.focus();
+}
 function executeSnippet(s,text) {
   if(s?.state!=='connected'){toast('请先连接终端');return;}
   s.term.paste(text.replace(/[\r\n]+$/, ''));
