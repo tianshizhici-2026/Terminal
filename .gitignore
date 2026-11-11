@@ -20,3 +20,4 @@ __pycache__/
 *.terminal.folder.part/
 *.terminal.folder.part.json
 *.terminal.folder.part.lock
+*.terminal.folder.sync.json

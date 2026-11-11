@@ -129,9 +129,9 @@ try
         }
         Check(File.Exists(Path.Combine(folderTarget,"old-only.txt")),"Partial folder overwrite destroyed original");
         FolderDownload.Run(source,identity,remoteFolder,folderTarget,(_,_)=>{},overwrite:true);
-        Check(!File.Exists(Path.Combine(folderTarget,"old-only.txt")),"Folder overwrite merged old contents");
+        Check(File.ReadAllText(Path.Combine(folderTarget,"old-only.txt"))=="original","Folder merge removed local-only content");
         Check(File.ReadAllBytes(Path.Combine(folderTarget,"nested","data.bin")).SequenceEqual(new byte[]{1,2,3}),"Folder replacement bytes differ");
-        Console.WriteLine("PASS folder restart and staged overwrite preserve original until completion");
+        Console.WriteLine("PASS folder restart and staged merge retain local-only contents and originals until completion");
 
         using(var stream=new MemoryStream(payload))source.UploadFile(stream,remoteFolder+"/nested/data.bin");
         using(var stream=new MemoryStream(payload.AsSpan(0,256*1024).ToArray()))source.UploadFile(stream,remoteFolder+"/a-first.bin");
@@ -156,6 +156,7 @@ try
     }
     finally{source.DeleteFile(remoteFolder+"/nested/data.bin");source.DeleteFile(remoteFolder+"/zero");source.DeleteDirectory(remoteFolder+"/nested");source.DeleteDirectory(remoteFolder+"/empty");source.DeleteDirectory(remoteFolder);}
 
+    IncrementalFolders.Run(source, identity, folder);
 }
 finally
 {

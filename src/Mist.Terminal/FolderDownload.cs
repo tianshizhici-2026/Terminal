@@ -10,6 +10,18 @@ internal static class FolderDownload
 {
     private sealed record Entry(string Path, bool Directory, long Size, long Modified);
     private sealed record Manifest(string Server, string Remote, Entry[] Entries);
+    private sealed record CompletedFile(Entry Entry, string Hash);
+    private sealed record SyncState(int Version, string Server, string Remote, CompletedFile[] Files);
+    private sealed record LocalStamp(long Size, long Modified);
+    private static LocalStamp? Stamp(string path) => File.Exists(path) ? new(new FileInfo(path).Length, File.GetLastWriteTimeUtc(path).Ticks) : null;
+    private static string Hash(string path, CancellationToken token)
+    {
+        using var file = File.OpenRead(path);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[128 * 1024]; int count;
+        while ((count = file.Read(buffer)) > 0) { token.ThrowIfCancellationRequested(); hash.AppendData(buffer, 0, count); }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
     public static string SafeName(string name)
     {
         if (string.IsNullOrWhiteSpace(name) || name is "." or ".." || name.EndsWith('.') || name.EndsWith(' ') ||
@@ -45,12 +57,39 @@ internal static class FolderDownload
     public static string? Run(SftpClient client, string server, string remote, string destination, Action<long,long> progress, CancellationToken token = default, bool overwrite = false, bool restart = false)
     {
         destination = Path.GetFullPath(destination); NoLinks(destination);
-        if (File.Exists(destination) || (Directory.Exists(destination) && !overwrite)) throw new IOException("目标已存在，请选择重新下载并覆盖，或其他保存位置。");
-        string stage = destination + ".terminal.folder.part", info = stage + ".json", gate = stage + ".lock";
-        foreach (var p in new[] {stage, info, gate}) NoLinks(p);
+        if (File.Exists(destination)) throw new IOException("目标是文件，请选择其他保存位置。");
+        string stage = destination + ".terminal.folder.part", info = stage + ".json", gate = stage + ".lock", sync = destination + ".terminal.folder.sync.json";
+        foreach (var p in new[] {stage, info, gate, sync}) NoLinks(p);
+        if (Directory.Exists(sync)) throw new IOException("下载校验记录位置已被文件夹占用，请选择其他保存位置。");
         using var ownership = new FileStream(gate, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
         var manifest = new Manifest(server, remote, Scan(client, remote, token));
-        string serialized = JsonSerializer.Serialize(manifest);
+        string serialized = JsonSerializer.Serialize(manifest), committing = Path.Combine(stage, "commit.json"); NoLinks(committing);
+        bool resumingCommit = !restart && File.Exists(committing) && File.Exists(info) && File.ReadAllText(committing) == serialized && File.ReadAllText(info) == serialized;
+        if (Directory.Exists(destination) && !overwrite && !resumingCommit) throw new IOException("目标已存在，请确认合并下载，或选择其他保存位置。");
+        var previous = new Dictionary<string, CompletedFile>(StringComparer.OrdinalIgnoreCase);
+        if (File.Exists(sync))
+        {
+            SyncState? state;
+            try { state = JsonSerializer.Deserialize<SyncState>(File.ReadAllText(sync)); }
+            catch (JsonException ex) { throw new IOException("下载校验记录损坏，请选择其他保存位置。", ex); }
+            if (state?.Version != 1 || state.Files == null || state.Files.Any(x => x?.Entry == null || x.Hash == null))
+                throw new IOException("下载校验记录无效，请选择其他保存位置。");
+            if (state.Server == server && state.Remote == remote)
+                foreach (var file in state.Files) previous[file.Entry.Path] = file;
+        }
+        // Check every destination before transferring or replacing anything. Local-only entries stay untouched.
+        var localStamps = new Dictionary<string, LocalStamp?>();
+        void CheckDestination(Entry entry)
+        {
+            string path = Path.Combine(destination, entry.Path.Replace('/', Path.DirectorySeparatorChar)); NoLinks(path);
+            if (entry.Directory ? File.Exists(path) : Directory.Exists(path))
+                throw new IOException("本地文件与文件夹类型冲突，请先重命名：" + entry.Path);
+        }
+        foreach (var entry in manifest.Entries)
+        {
+            token.ThrowIfCancellationRequested(); CheckDestination(entry);
+            if (!entry.Directory) localStamps[entry.Path] = Stamp(Path.Combine(destination, entry.Path.Replace('/', Path.DirectorySeparatorChar)));
+        }
         if (restart) { DownloadFiles.DeleteStage(stage); File.Delete(info); }
         if (Directory.Exists(stage) || File.Exists(info))
         {
@@ -64,6 +103,8 @@ internal static class FolderDownload
             Directory.CreateDirectory(stage);
         }
         string tree = Path.Combine(stage, "tree"); NoLinks(tree); Directory.CreateDirectory(tree);
+        var completed = new List<CompletedFile>();
+        var reused = new Dictionary<string, string>();
         long total = manifest.Entries.Sum(x => x.Size), done = 0;
         progress(done,total);
         for (int i = 0; i < manifest.Entries.Length; i++)
@@ -74,26 +115,29 @@ internal static class FolderDownload
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             string blob = Path.Combine(stage, i + ".data"), hashFile = blob + ".sha256";
             NoLinks(blob); NoLinks(hashFile);
-            string Hash(string path)
-            {
-                using var f = File.OpenRead(path);
-                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-                var buffer = new byte[128 * 1024]; int count;
-                while ((count = f.Read(buffer)) > 0) { token.ThrowIfCancellationRequested(); hash.AppendData(buffer,0,count); }
-                return Convert.ToHexString(hash.GetHashAndReset());
-            }
             string? savedHash = File.Exists(hashFile) ? File.ReadAllText(hashFile) : null;
-            if (File.Exists(target) && new FileInfo(target).Length == entry.Size && savedHash != null && Hash(target) == savedHash)
+            if (File.Exists(target) && new FileInfo(target).Length == entry.Size && savedHash != null && Hash(target, token) == savedHash)
             {
                 // Completed files are verified in place; never copy or download them again on resume.
+                completed.Add(new(entry, savedHash));
                 File.Delete(blob); done += entry.Size; progress(done,total); continue;
             }
-            if (!File.Exists(blob) || new FileInfo(blob).Length != entry.Size || savedHash == null || Hash(blob) != savedHash)
+            string existing = Path.Combine(destination, entry.Path.Replace('/', Path.DirectorySeparatorChar)); NoLinks(existing);
+            string? reusableHash = savedHash ?? (previous.TryGetValue(entry.Path, out var old) && old.Entry == entry ? old.Hash : null);
+            if ((overwrite || resumingCommit) && reusableHash != null && File.Exists(existing) && new FileInfo(existing).Length == entry.Size && Hash(existing, token) == reusableHash)
+            {
+                File.Delete(target); // Discard a damaged staged copy; the verified destination is authoritative.
+                reused.Add(entry.Path, reusableHash); completed.Add(new(entry, reusableHash));
+                done += entry.Size; progress(done,total); continue;
+            }
+            if (!File.Exists(blob) || new FileInfo(blob).Length != entry.Size || savedHash == null || Hash(blob, token) != savedHash)
             {
                 ResumableDownload.Run(client, server, remote.TrimEnd('/') + "/" + entry.Path, blob, (n, _) => progress(done+n,total), token, overwrite:true);
-                File.WriteAllText(hashFile, Hash(blob));
+                savedHash = Hash(blob, token);
+                File.WriteAllText(hashFile, savedHash);
+                File.SetLastWriteTimeUtc(blob, new DateTime(entry.Modified, DateTimeKind.Utc));
             }
-            File.Move(blob, target, true); done += entry.Size; progress(done,total);
+            File.Move(blob, target, true); completed.Add(new(entry, savedHash!)); done += entry.Size; progress(done,total);
         }
         token.ThrowIfCancellationRequested();
         if (!manifest.Entries.SequenceEqual(Scan(client, remote, token))) throw new IOException("下载期间远程目录已变化；未生成完成目录。");
@@ -110,10 +154,44 @@ internal static class FolderDownload
         }
         VerifyTree(tree);
         token.ThrowIfCancellationRequested();
-        string? backup = DownloadFiles.PromoteDirectory(tree, destination, overwrite);
+        foreach (var entry in manifest.Entries)
+        {
+            token.ThrowIfCancellationRequested(); CheckDestination(entry);
+            if (entry.Directory) continue;
+            string existing = Path.Combine(destination, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+            if (Stamp(existing) != localStamps[entry.Path] || (reused.TryGetValue(entry.Path, out var hash) && Hash(existing, token) != hash))
+                throw new IOException("下载期间本地文件已变化，请重试：" + entry.Path);
+        }
+        NoLinks(destination);
+        if (Directory.Exists(destination) && !overwrite && !resumingCommit) throw new IOException("目标文件夹已存在，请确认合并后重试。");
+        using (var file = new FileStream(committing, FileMode.Create, FileAccess.Write))
+        { JsonSerializer.Serialize(file, manifest); file.Flush(true); }
+        Directory.CreateDirectory(destination);
+        // Only complete files are promoted. A failed/cancelled merge can resume using the staged hashes.
+        foreach (var entry in manifest.Entries)
+        {
+            token.ThrowIfCancellationRequested(); CheckDestination(entry);
+            string relative = entry.Path.Replace('/', Path.DirectorySeparatorChar);
+            string final = Path.Combine(destination, relative);
+            if (entry.Directory) Directory.CreateDirectory(final);
+            else if (!reused.ContainsKey(entry.Path)) File.Move(Path.Combine(tree, relative), final, overwrite);
+        }
+        string nextSync = Path.Combine(stage, "sync.json"); NoLinks(nextSync); NoLinks(sync);
+        using (var file = new FileStream(nextSync, FileMode.Create, FileAccess.Write))
+        { JsonSerializer.Serialize(file, new SyncState(1, server, remote, completed.ToArray())); file.Flush(true); }
+        File.Move(nextSync, sync, true);
+        void RemoveEmptyTree(string directory)
+        {
+            NoLinks(directory);
+            foreach (var child in Directory.EnumerateDirectories(directory)) RemoveEmptyTree(child);
+            Directory.Delete(directory); // Never delete an unexpected file added during commit.
+        }
+        RemoveEmptyTree(tree);
         // Delete only known checkpoint files, never recursively delete a supplied path.
-        for (int i=0;i<manifest.Entries.Length;i++) if (!manifest.Entries[i].Directory) { File.Delete(Path.Combine(stage,i+".data")); File.Delete(Path.Combine(stage,i+".data.sha256")); }
+        for (int i=0;i<manifest.Entries.Length;i++) if (!manifest.Entries[i].Directory)
+            foreach (var suffix in new[] {".data", ".data.sha256", ".data.terminal.part", ".data.terminal.part.json"}) File.Delete(Path.Combine(stage,i+suffix));
+        File.Delete(committing);
         Directory.Delete(stage); File.Delete(info);
-        return backup;
+        return null;
     }
 }

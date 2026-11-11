@@ -237,8 +237,9 @@ public partial class MainWindow : Window
             {
                 if (restart || File.Exists(local) || Directory.Exists(local))
                 {
-                    string message = restart ? "将丢弃此位置的旧断点，从头下载。" : "此位置已存在同名内容。";
-                    message += S(p,"directory") == "yes" ? "\n目标文件夹将整体替换，不合并；下载完成前保留原目录。" : "\n下载完成后替换原文件；中断时保留原文件。";
+                    bool folder = S(p,"directory") == "yes";
+                    string message = restart ? (folder ? "将清除旧断点，重新检查文件。" : "将丢弃此位置的旧断点，从头下载。") : "此位置已存在同名内容。";
+                    message += folder ? "\n新增或更新文件，跳过未改动文件，保留本地其他文件。" : "\n下载完成后替换原文件；中断时保留原文件。";
                     if (!ConfirmWindow.Ask(this, "确认下载并覆盖？", message, "下载并覆盖", local)) return new { cancelled = true };
                     overwrite = true;
                 }

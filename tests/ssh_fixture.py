@@ -1,8 +1,14 @@
 """Loopback-only SSH/SFTP fixture; test credentials, temporary isolated filesystem."""
-import os, socket, threading, tempfile, time, pathlib, paramiko, struct
+import os, socket, threading, tempfile, time, pathlib, paramiko, struct, json
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix='mist-sftp-test-'))
 KEY = paramiko.RSAKey.generate(2048)
+READ_BYTES = {}
 class Handle(paramiko.SFTPHandle):
+    def read(self, offset, length):
+        data = super().read(offset, length)
+        if isinstance(data, bytes) and getattr(self, 'path', '') != '/__test_read_counts__.json':
+            READ_BYTES[self.path] = READ_BYTES.get(self.path, 0) + len(data)
+        return data
     def write(self, offset, data):
         if getattr(self, 'drop_edit', False):
             self.writefile.write(data[:16]);self.writefile.flush()
@@ -53,9 +59,11 @@ class Files(paramiko.SFTPServerInterface):
     lstat=stat
     def open(self,path,flags,attr):
         try:
+            if path == '/__test_read_counts__.json' and not flags & (os.O_WRONLY | os.O_RDWR):
+                self.local(path).write_text(json.dumps(READ_BYTES), encoding='utf-8')
             fd=os.open(self.local(path),flags|getattr(os,'O_BINARY',0),0o600)
             f=os.fdopen(fd,'r+b' if flags & os.O_RDWR else 'wb' if flags & os.O_WRONLY else 'rb')
-            h=Handle(flags);h.readfile=f;h.writefile=f
+            h=Handle(flags);h.readfile=f;h.writefile=f;h.path=path
             flag=ROOT/'__drop_next_edit__'
             if '.terminal-edit-' in path and flag.exists():
                 flag.unlink();h.drop_edit=True;h.transport=self.transport
