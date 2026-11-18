@@ -66,6 +66,7 @@ internal sealed class SettingsStore(string path)
         }
         var settings = new JsonObject { ["fontSize"] = Math.Clamp(request["fontSize"]?.GetValue<int>() ?? 14, 10, 28), ["defaultShell"] = Text(request,"defaultShell") == "cmd" ? "cmd" : "powershell", ["profiles"] = profiles, ["sftpWidth"] = Math.Clamp(request["sftpWidth"]?.GetValue<int>() ?? 440, 300, 1200) };
         string font = Text(request, "fontFamily");
+        settings["snippetsWidth"] = Math.Clamp(request["snippetsWidth"]?.GetValue<int>() ?? previousSettings["snippetsWidth"]?.GetValue<int>() ?? 320, 260, 1200);
         settings["fontFamily"] = new[] { "JetBrains Mono", "Consolas", "SimHei", "FangSong" }.Contains(font) ? font : "JetBrains Mono";
         var snippets = new JsonArray();
         var incoming = request["snippets"] as JsonArray ?? previousSettings["snippets"] as JsonArray ?? new JsonArray();

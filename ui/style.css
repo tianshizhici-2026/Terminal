@@ -17,9 +17,9 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 
 /* SFTP panel typography. */
 #files{order:-1;width:440px;font-size:23.4px;border-left:0;border-right:1px solid var(--border)}
-#files .panel-title{font-size:18px;line-height:26px;padding:4px 10px;flex-shrink:0}
+#files .panel-title,#snippets .panel-title{font-size:18px;line-height:26px;padding:4px 10px;flex-shrink:0}
 #files .panel-title small{font-size:13px}
-#files .panel-title button{font-size:26px;line-height:1;width:28px;height:28px}
+#files .panel-title button,#snippets .panel-title button{font-size:26px;line-height:1;width:28px;height:28px}
 #files .panel-title~div{font-size:19.8px}
 #files #remote-path,#files .file-actions button,#files .file-open b,#files #transfer{font-size:18px}
 #files .file-row small{font-size:16.2px;white-space:nowrap;flex-shrink:0}
@@ -31,9 +31,11 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 #file-menu button{font-size:21.6px}
 
 #files{position:relative;max-width:none}
-#sftp-resizer{position:absolute;inset:0 0 0 auto;width:8px;cursor:col-resize;touch-action:none;z-index:10}
-#sftp-resizer:hover,#sftp-resizer:focus-visible,.sftp-resizing #sftp-resizer{background:#b4d8c155;outline:none;border-right:2px solid var(--accent)}
-.sftp-resizing,.sftp-resizing *{cursor:col-resize!important;user-select:none!important}
+.panel-resizer{position:absolute;inset:0 0 0 auto;width:8px;cursor:col-resize;touch-action:none;z-index:10}
+.panel-resizer[data-edge=left]{inset:0 auto 0 0}
+.panel-resizer:hover,.panel-resizer:focus-visible,.panel-resizer.resizing{background:#b4d8c155;outline:none;border-right:2px solid var(--accent)}
+.panel-resizer[data-edge=left]:is(:hover,:focus-visible,.resizing){border-right:0;border-left:2px solid var(--accent)}
+.panel-resizing,.panel-resizing *{cursor:col-resize!important;user-select:none!important}
 
 /* The viewport extends past the final whole terminal row after resizing. */
 .xterm .xterm-viewport{background-color:var(--terminal)}
@@ -46,7 +48,7 @@ main{padding:0;min-width:0}.app{background:var(--terminal)}.workspace{border:0;b
 /* Auxiliary panels and connection actions. */
 #recent-profiles{width:min(600px,90%);max-height:65%;overflow:auto;margin-top:20px;text-align:left}#empty:has(.profile) .empty-symbol{display:none}#empty{overflow:auto;padding:16px}.profile-connect{flex-shrink:0;padding:10px 12px;font-size:16px;color:var(--accent)}#delete-profile{color:#ffa0a9;margin-right:auto}.profile-main b{white-space:nowrap}#quick-auth-dialog label,#snippet-dialog label{display:flex;flex-direction:column;gap:10px;margin:12px 0}#quick-auth-title{overflow-wrap:anywhere}
 #session-menu{position:fixed;inset:auto;margin:0;width:225px;padding:6px;background:#33363d;border:1px solid #606774;border-radius:8px;color:var(--text);box-shadow:0 10px 30px #0006}#session-menu button{display:block;width:100%;padding:10px 12px;text-align:left;font-size:18px}#session-menu::backdrop{background:transparent}
-#snippets{order:1;width:320px;max-width:42vw;flex-shrink:0;min-height:0;display:flex;flex-direction:column;background:#292c30;border-left:1px solid var(--border)}#snippets .panel-title{font-size:20px}#snippets .panel-title button{font-size:28px}#snippet-add{padding:14px;font-size:17px;text-align:left;color:var(--accent)}#snippet-list{overflow:auto;flex:1;padding:8px}.snippet-row{display:flex;align-items:center;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden}.snippet-use{display:block;flex:1;min-width:0;text-align:left;padding:12px}.snippet-use pre{font:17px 'JetBrains Mono';white-space:pre-wrap;overflow-wrap:anywhere;max-height:130px;overflow:hidden;margin:0;color:var(--text)}.snippet-actions{display:flex;flex-shrink:0;padding:5px}.snippet-actions button{font-size:14px;padding:6px 8px}.panel-empty{color:var(--muted);font-size:16px;text-align:center}#snippet-dialog{width:700px}#snippet-dialog textarea{font:16px 'JetBrains Mono';color:var(--text);background:#292b30;border:1px solid #555860;border-radius:7px;padding:10px;resize:vertical;min-height:150px;width:100%;box-sizing:border-box}#snippet-dialog label{font-size:17px}
+#snippets{position:relative;order:1;width:320px;flex-shrink:0;min-height:0;display:flex;flex-direction:column;background:#292c30;border-left:1px solid var(--border)}#snippet-add{padding:5px 10px;font-size:14px;line-height:20px;text-align:left;color:var(--accent);flex-shrink:0}#snippet-list{overflow:auto;flex:1;min-height:0;padding:4px 8px 6px}.snippet-row{display:flex;align-items:center;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;overflow:hidden}.snippet-use{display:block;flex:1;min-width:0;text-align:left;padding:6px 8px}.snippet-use pre{font:15px/1.5 'JetBrains Mono';white-space:pre-wrap;overflow-wrap:anywhere;max-height:130px;overflow:hidden;margin:0;color:var(--text)}.snippet-actions{display:flex;flex-shrink:0;padding:2px}.snippet-actions button{font-size:13px;line-height:20px;padding:4px 6px}.panel-empty{color:var(--muted);font-size:16px;text-align:center}#snippet-dialog{width:700px}#snippet-dialog textarea{font:16px 'JetBrains Mono';color:var(--text);background:#292b30;border:1px solid #555860;border-radius:7px;padding:10px;resize:vertical;min-height:150px;width:100%;box-sizing:border-box}#snippet-dialog label{font-size:17px}
 .file-filter{padding:4px 8px;display:flex;flex-direction:column;gap:4px;flex-shrink:0}.file-filter input{font-size:14px;line-height:20px;width:100%;padding:4px 6px}
 .file-filter span:empty{display:none}.file-filter span{font-size:11.2px;color:#ffa0a9;overflow-wrap:anywhere}.file-filter input[aria-invalid=true]{border-color:#ff7885}.terminal-pane{right:16px}
 

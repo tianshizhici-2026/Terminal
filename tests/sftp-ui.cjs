@@ -31,6 +31,7 @@ const path = require('node:path');
           else if (m.action === 'sftp' && m.op === 'list') reply({path:'/home/test',entries:[{name:'sample.bin',path:'/home/test/sample.bin',size:1048576,directory:false},{name:'folder',path:'/home/test/folder',directory:true}]});
           else if (m.action === 'sftp' && m.op === 'prepareDownload') reply({destination:m.destination||'C:/fixture/'+m.path.split('/').at(-1),overwrite:'yes'});
           else if (m.action === 'sftp' && m.op === 'download') { testBridge.download=m; testBridge.emit({type:'transfer',id:m.id,done:262144,total:1048576}); }
+          else if (m.action === 'sftp' && m.op === 'upload') testBridge.upload=m;
           else if (m.action === 'pauseDownload') { reply(null); testBridge.emit({request:testBridge.download.request,ok:true,result:{paused:true}}); }
           else reply(null);
         }
@@ -67,6 +68,26 @@ const path = require('node:path');
       }
     }
     await page.evaluate(() => window.terminalAction('files'));
+    await page.locator('#upload').click();
+    await page.evaluate(()=>{const m=testBridge.upload;testBridge.emit({type:'transfer',id:m.id,transferId:m.transferId,name:'first.txt',index:1,count:3,done:50,total:100});});
+    await expect(page.locator('#transfer')).toContainText('1/3 · first.txt · 50%');
+    await expect(page.locator('#transfer-toggle')).toBeHidden();
+    await page.locator('#files-close').click();await page.evaluate(()=>window.terminalAction('files'));
+    await expect(page.locator('#transfer')).toContainText('1/3');
+    await page.evaluate(()=>{const m=testBridge.upload;testBridge.emit({type:'transfer',id:m.id,transferId:'stale-upload',name:'wrong.txt',index:3,count:3,done:100,total:100});});
+    await expect(page.locator('#transfer')).not.toContainText('wrong.txt');
+    await page.evaluate(()=>{const m=testBridge.upload;testBridge.emit({request:m.request,ok:true,result:{success:false,uploaded:1,skipped:1,failed:1,pending:0,files:[{name:'first.txt',state:'uploaded'},{name:'exists.txt',state:'skipped',error:'同名文件已存在'},{name:'missing.txt',state:'failed',error:'文件不存在'}]}});});
+    await expect(page.locator('#transfer')).toContainText('上传 1，跳过 1，失败 1');
+    await expect(page.locator('#transfer')).toHaveAttribute('title',/missing.txt：文件不存在/);
+    await page.locator('#upload').click();
+    await page.evaluate(()=>{const m=testBridge.upload;testBridge.emit({request:m.request,ok:true,result:{cancelled:true}});});
+    await expect(page.locator('#transfer')).toContainText('上传 1，跳过 1，失败 1');
+    await page.locator('#upload').click();
+    await page.evaluate(()=>{const m=testBridge.upload;testBridge.emit({request:m.request,ok:true,result:{success:true,uploaded:2,skipped:0,failed:0,pending:0,files:[{name:'one.txt',state:'uploaded'},{name:'two.txt',state:'uploaded'}]}});});
+    await expect(page.locator('#transfer')).toContainText('已完成 · 上传 2');
+    await page.clock.fastForward(5100);
+    await expect(page.locator('#transfer')).not.toContainText('已完成');
+    console.log('PASS batch upload progress, panel reopen, stale progress isolation, per-file result summary and chooser cancellation');
     await page.locator('#mkdir').click();
     await expect(page.locator('#file-menu [role=menuitem]')).toHaveText(['文件','文件夹']);
     await page.locator('#file-menu').getByRole('menuitem',{name:'文件',exact:true}).click();
@@ -237,6 +258,20 @@ const path = require('node:path');
     await expect(page.locator('#file-server option')).toHaveCount(4);
     await expect(page.locator('#file-server')).toHaveValue(duplicateId);
     console.log('PASS server deduplication preserves transfers and reconnect selection; distinct users/ports/hosts remain selectable, closing a representative keeps its remaining session');
+
+    await page.locator('#upload').click();
+    const staleUpload=await page.evaluate(()=>testBridge.upload);
+    await page.evaluate(m=>testBridge.emit({type:'exit',id:m.id}),staleUpload);
+    await expect(page.locator('#transfer')).toContainText('已中断');
+    await page.locator('#file-reconnect').click();
+    await expect(page.locator('#file-reconnect')).toBeHidden();
+    await page.locator('#upload').click();
+    await page.evaluate(()=>{const m=testBridge.upload;testBridge.emit({type:'transfer',id:m.id,transferId:m.transferId,name:'new.txt',index:1,count:2,done:50,total:100});});
+    await page.evaluate(m=>testBridge.emit({request:m.request,ok:false,error:'late old upload failure'}),staleUpload);
+    await expect(page.locator('#transfer')).toContainText('1/2 · new.txt · 50%');
+    await page.evaluate(()=>{const m=testBridge.upload;testBridge.emit({request:m.request,ok:true,result:{success:true,uploaded:2,skipped:0,failed:0,pending:0,files:[]}});});
+    await expect(page.locator('#transfer')).toContainText('已完成 · 上传 2');
+    console.log('PASS upload reconnect starts a new batch and ignores late previous-session failure');
 
     await page.locator('#files-close').click();
     await expect(page.locator('#file-menu')).toBeHidden();

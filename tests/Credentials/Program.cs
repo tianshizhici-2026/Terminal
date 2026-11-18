@@ -20,6 +20,10 @@ try {
  var sized=Request(null);sized["sftpWidth"]=680;Save(sized);
  Check(new SettingsStore(path).LoadForUi()["sftpWidth"]!.GetValue<int>()==680&&store.GetPassword("test")==secret,"SFTP width persists without changing saved password");
  sized["sftpWidth"]=9999;Save(sized);Check(store.LoadForUi()["sftpWidth"]!.GetValue<int>()==1200,"SFTP width is bounded");
+ sized["snippetsWidth"]=520;Save(sized);Save(Request(null));
+ Check(new SettingsStore(path).LoadForUi()["snippetsWidth"]!.GetValue<int>()==520&&store.GetPassword("test")==secret,"snippet width persists across legacy saves without changing credentials");
+ sized["snippetsWidth"]=1;Save(sized);Check(store.LoadForUi()["snippetsWidth"]!.GetValue<int>()==260,"snippet minimum width is bounded");
+ sized["snippetsWidth"]=9999;Save(sized);Check(store.LoadForUi()["snippetsWidth"]!.GetValue<int>()==1200,"snippet maximum width is bounded");
  var extended=Request(null);extended["fontFamily"]="SimHei";extended["profiles"]![0]!["lastUsed"]=123456789;extended["profiles"]![0]!["sortOrder"]=2;extended["profiles"]![0]!["initialDirectory"]="/srv/projects";
  extended["snippets"]=new JsonArray(new JsonObject{["id"]="code-1",["title"]="中文代码",["code"]="pwd\nls -la"});Save(extended);
  var restored=new SettingsStore(path).LoadForUi();

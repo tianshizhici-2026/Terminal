@@ -13,6 +13,7 @@ public partial class MainWindow : Window
     private readonly HashSet<string> opening = [];
     private readonly HashSet<string> cancelled = [];
     private readonly Dictionary<string, (CancellationTokenSource Cancellation, string TransferId, TaskCompletionSource Completion)> downloads = new();
+    private readonly Dictionary<string, (CancellationTokenSource Cancellation, TaskCompletionSource Completion)> uploads = new();
     private readonly Dictionary<(string Id, string Path), string> downloadDestinations = new();
     private readonly string dataDir = Environment.GetEnvironmentVariable("TERMINAL_DATA_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Terminal");
     private bool closing;
@@ -56,6 +57,7 @@ public partial class MainWindow : Window
             updates?.Dispose();
             editor?.Dispose();
             foreach (var download in downloads.Values) download.Cancellation.Cancel();
+            foreach (var upload in uploads.Values) upload.Cancellation.Cancel();
             foreach (var session in sessions.Values) _ = Task.Run(session.Dispose);
             sessions.Clear(); Web.Dispose();
         };
@@ -149,11 +151,14 @@ public partial class MainWindow : Window
             case "close":
                 downloads.TryGetValue(id, out var download);
                 download.Cancellation?.Cancel();
+                uploads.TryGetValue(id, out var upload);
+                upload.Cancellation?.Cancel();
                 foreach (var key in downloadDestinations.Keys.Where(x => x.Id == id).ToArray()) downloadDestinations.Remove(key);
                 if (opening.Contains(id)) cancelled.Add(id);
                 sessions.TryRemove(id, out var removed);
                 if (removed != null && editor != null) await editor.DetachAsync(removed);
                 if (download.Completion != null) await download.Completion.Task;
+                if (upload.Completion != null) await upload.Completion.Task;
                 if (removed != null) await Task.Run(removed.Dispose);
                 return null;
             case "copy": await ClipboardAccess.WriteAsync(new System.Windows.Interop.WindowInteropHelper(this).Handle, S(p, "text")); return null;
@@ -209,11 +214,14 @@ public partial class MainWindow : Window
         }
         bool overwrite = S(p,"overwrite") == "yes", restart = S(p,"restart") == "yes";
         string transferId = S(p,"transferId");
+        string[] uploadFiles = [];
         if (op == "upload")
         {
-            var dialog = new OpenFileDialog { Title = "选择上传文件" };
+            if (uploads.ContainsKey(id)) throw new InvalidOperationException("当前会话已有上传任务。");
+            var dialog = new OpenFileDialog { Title = "选择上传文件", Multiselect = true };
             if (dialog.ShowDialog(this) != true) return new { cancelled = true };
-            local = dialog.FileName; path = path.TrimEnd('/') + "/" + Path.GetFileName(local);
+            if (!sessions.TryGetValue(id, out var selectedSession) || selectedSession != remote) throw new IOException("会话已结束，请重新连接后上传。");
+            uploadFiles = dialog.FileNames;
         }
         if (op is "download" or "prepareDownload")
         {
@@ -249,6 +257,7 @@ public partial class MainWindow : Window
         using var cancellation = new CancellationTokenSource();
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (op == "download") downloads.Add(id, (cancellation, transferId, completion));
+        if (op == "upload") uploads.Add(id, (cancellation, completion));
         var operationLock = op == "list" ? remote.BrowseLock : remote.FileLock;
         bool locked = false;
         try
@@ -266,10 +275,8 @@ public partial class MainWindow : Window
                 }
                 if (op == "upload")
                 {
-                    if (client.Exists(path)) throw new IOException("远程文件已存在，请先重命名后再上传。");
-                    using var stream = File.OpenRead(local);
-                    ulong total = (ulong)stream.Length; long last = 0;
-                    client.UploadFile(stream, path, false, done => { if (Environment.TickCount64 - last > 120 || done == total) { last = Environment.TickCount64; Send(new { type = "transfer", id, done, total }); } });
+                    return BatchUpload.Run(client, uploadFiles, path,
+                        progress => Send(new { type = "transfer", id, transferId, done = progress.Done, total = progress.Total, name = progress.Name, index = progress.Index, count = progress.Count }), cancellation.Token);
                 }
                 else if (op == "download")
                 {
@@ -298,6 +305,7 @@ public partial class MainWindow : Window
         finally
         {
             if (op == "download") downloads.Remove(id);
+            if (op == "upload") uploads.Remove(id);
             if (locked) operationLock.Release();
             completion.TrySetResult();
         }

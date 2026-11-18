@@ -5,7 +5,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import './style.css';
-import { setupSftpResize } from './sftp-resize';
+import { setupPanelResize } from './panel-resize';
 import { setupSnippets } from './snippets';
 import { setupDownloadQueue } from './download-queue';
 import { setupFileFilter } from './file-filter';
@@ -43,16 +43,17 @@ const fonts = {'JetBrains Mono':'"JetBrains Mono"','Consolas':'Consolas','SimHei
 let fontFamily = 'JetBrains Mono';
 const theme = { background:'#2d2f34', foreground:'#edf0f5', cursor:'#d1f0da', cursorAccent:'#2d2f34', selectionBackground:'#445a78', selectionForeground:'#ffffff', selectionInactiveBackground:'#414c5e', black:'#737d8c', red:'#ff7885', green:'#82db70', yellow:'#f5ca57', blue:'#75adff', magenta:'#d18cff', cyan:'#4dd9df', white:'#e0e6ef', brightBlack:'#a5afbf', brightRed:'#ffa0a9', brightGreen:'#adf299', brightYellow:'#ffe293', brightBlue:'#a6caff', brightMagenta:'#e5b5ff', brightCyan:'#96f0ee', brightWhite:'#ffffff' };
 const decorations = {matchBackground:'#665320', matchBorder:'#e3bc51', matchOverviewRuler:'#e3bc51', activeMatchBackground:'#3f6652', activeMatchBorder:'#c7f0d4', activeMatchColorOverviewRuler:'#c7f0d4'};
-const sftpSize = setupSftpResize($('files'), () => save().catch(report));
 let snippetField = null;
 document.addEventListener('focusin',({target})=>{
   if(target.closest('#snippets'))return;
   snippetField=target.matches('#remote-path, #file-filter')?target:null;
 });
 const snippets = setupSnippets({paste:pasteSnippet,execute:text=>executeSnippet(current(),text),save:()=>save(),confirm:confirmAction,report});
+const sftpSize = setupPanelResize($('files'), () => save().catch(report), {id:'sftp-resizer',label:'调整 SFTP 宽度',otherPanel:$('snippets')});
+const snippetsSize = setupPanelResize($('snippets'), () => save().catch(report), {id:'snippets-resizer',label:'调整常用代码宽度',otherPanel:$('files'),edge:'left',defaultWidth:320,minWidth:260});
 const updates = setupUpdates({call,bridge,report});
 setupRemoteEdits({call,bridge,report});
-function save(credential) { return call('save', {fontSize, fontFamily, snippets:snippets.items, sftpWidth:sftpSize.width, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
+function save(credential) { return call('save', {fontSize, fontFamily, snippets:snippets.items, sftpWidth:sftpSize.width, snippetsWidth:snippetsSize.width, profiles, defaultShell:$('shell').value,...(credential ? {credential} : {})}); }
 async function copySelection(s, quiet=false) {
   const text=s?.term.getSelection(), version=s?.selectionVersion;
   if(!text)return;
@@ -172,6 +173,7 @@ async function reconnectSession(s, connection) {
   if(!s || s.state==='connecting')return;
   const oldId=s.id, id=crypto.randomUUID(), wasActive=activeId===oldId;
   const order=[...sessions.entries()];
+  interruptUpload(s);
   downloadQueue.invalidate(s);
   s.fileEpoch=(s.fileEpoch||0)+1;s.fileLoading=false;
   s.id=id;s.state='connecting';s.pane.dataset.session=id;
@@ -213,8 +215,8 @@ bridge?.addEventListener('message', ({data:m}) => {
   if (m.request) { const p = pending.get(m.request); if (p) { clearTimeout(p.timer); pending.delete(m.request); m.ok ? p.resolve(m.result) : p.reject(new Error(m.error)); } return; }
   const s = sessions.get(m.id);
   if (m.type === 'output' && s) s.term.write(m.data, () => { if ($('search-dialog').open) { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch,180); } });
-  if (m.type === 'exit' && s && s.state !== 'offline') { s.state = 'offline'; downloadQueue.invalidate(s); s.term.writeln('\r\n\x1b[90m— 会话已结束 —\x1b[0m'); notify('close',{id:s.id}); renderTabs(); updateFilePanel(); }
-  if (m.type === 'transfer' && s?.transfer && (!m.transferId || s.transfer.attempt===m.transferId)) { s.transfer.done = m.done; s.transfer.total = m.total; renderTransfer(); }
+  if (m.type === 'exit' && s && s.state !== 'offline') { s.state = 'offline'; interruptUpload(s); downloadQueue.invalidate(s); s.term.writeln('\r\n\x1b[90m— 会话已结束 —\x1b[0m'); notify('close',{id:s.id}); renderTabs(); updateFilePanel(); }
+  if (m.type === 'transfer' && s?.transfer && (!m.transferId || s.transfer.attempt===m.transferId)) { s.transfer.done = m.done; s.transfer.total = m.total; if(s.transfer.op==='upload'){s.transfer.name=m.name||s.transfer.name;s.transfer.index=m.index;s.transfer.count=m.count;} renderTransfer(); }
   if (m.type === 'error') report(m.error);
 });
 function orderedProfiles() {
@@ -431,6 +433,9 @@ function completeTransfer(s, transfer) {
     if(sessions.get(s.id)===s)renderTransfer();
   },5000);
 }
+function interruptUpload(s) {
+  if(s.transfer?.op==='upload' && s.transfer.state==='running') { s.transfer.state='failed';s.transfer.error='上传已中断，请重新选择未完成的文件。';s.transfer.attempt=null; }
+}
 const downloadQueue=setupDownloadQueue({call,current:fileCurrent,sessions,busy:fileBusy,render:()=>renderTransfer(),report,complete:completeTransfer});
 function renderTransfer() {
   downloadQueue.refresh();
@@ -440,8 +445,8 @@ function renderTransfer() {
   $('transfer-toggle').textContent = ['paused','failed'].includes(t?.state) ? '继续' : t?.state === 'pausing' ? '暂停中…' : '暂停';
   if (!t) { $('transfer').textContent = s?.fileSummary || ''; return; }
   const label = {queued:'等待',selecting:'选择位置',running:'传输中',pausing:'暂停中',paused:'已暂停',failed:'已中断',completed:'已完成'}[t.state];
-  $('transfer').textContent = `${label} · ${t.name}${t.total != null ? ` · ${t.total ? Math.round(t.done/t.total*100) : 100}%` : ''}`;
-  $('transfer').title = t.error || (t.done != null ? `${formatSize(t.done)} / ${formatSize(t.total)}` : t.name);
+  $('transfer').textContent = t.summary ? `${t.state==='failed'?'未全部完成':label} · ${t.summary}` : `${label}${t.count?` ${t.index}/${t.count}`:''} · ${t.name}${t.total != null ? ` · ${t.total ? Math.round(t.done/t.total*100) : 100}%` : ''}`;
+  $('transfer').title = t.details || t.error || (t.done != null ? `${formatSize(t.done)} / ${formatSize(t.total)}` : t.name);
 }
 $('transfer-toggle').onclick=()=>{
   const s=fileCurrent(),t=s?.transfer;if(!t)return;
@@ -513,16 +518,27 @@ async function fileAction(op,args) {
   if (fileBusy.has(id)) { toast('请等待当前传输完成'); return; }
   const path = filePath, previous = s.transfer, isTransfer = ['download','upload'].includes(op);
   fileBusy.add(id);
-  if (isTransfer) s.transfer = {op,path:args.path,name:args.path.split('/').at(-1),state:'running'};
+  const transfer=isTransfer?{op,path:args.path,name:args.path.split('/').at(-1)||'上传',state:'running',attempt:crypto.randomUUID()}:null;
+  if (isTransfer) s.transfer = transfer;
+  const transferId=transfer?.attempt;
+  const attached=()=>sessions.get(id)===s && (!isTransfer || s.transfer===transfer && s.transfer.attempt===transferId);
   renderTransfer();
   try {
-    const result = await call('sftp',{id,op,...args});
+    const result = await call('sftp',{id,op,...args,...(transferId?{transferId}:{})});
+    if(!attached())return;
     if (result?.cancelled) s.transfer = previous;
     else if (result?.paused) s.transfer.state = 'paused';
+    else if(op==='upload' && result?.files) {
+      transfer.summary=`上传 ${result.uploaded}`+(result.skipped?`，跳过 ${result.skipped}`:'')+(result.failed?`，失败 ${result.failed}`:'')+(result.pending?`，未上传 ${result.pending}`:'');
+      transfer.details=result.files.map(file=>`${file.name}：${file.error||'已上传'}`).join('\n');
+      if(result.success)completeTransfer(s,transfer);
+      else {transfer.state='failed';transfer.error=transfer.details;report(new Error(transfer.summary));}
+    }
     else { if (isTransfer) completeTransfer(s,s.transfer); if(op!=='edit')toast('文件操作已完成',5000); }
-    if (fileCurrent()===s && !result?.paused && !result?.cancelled && !['download','edit'].includes(op)) await loadFiles(path);
+    if(op==='upload' && !result?.cancelled)s.fileLoaded=false;
+    if (fileCurrent()===s && filePath===path && s.state==='connected' && !result?.paused && !result?.cancelled && !['download','edit'].includes(op)) await loadFiles(path,s);
   }
-  catch (e) { if (isTransfer) { s.transfer.state = 'failed'; s.transfer.error = e.message; } report(e); }
+  catch (e) { if(attached()){if (isTransfer) { transfer.state = 'failed'; transfer.error = e.message; } report(e);} }
   finally { fileBusy.delete(id); renderTransfer(); downloadQueue.pump(s); }
 }
 function toggleFiles() { if($('files').hidden && innerWidth<1100) $('snippets').hidden=true; $('file-menu').hidePopover(); $('files').hidden = !$('files').hidden; updateFilePanel(); }
@@ -595,8 +611,8 @@ window.addEventListener('keydown', e => {
   else if (key === 'tab') { e.preventDefault(); const ids = [...sessions.keys()]; if (ids.length) activate(ids[(ids.indexOf(activeId)+(e.shiftKey ? ids.length-1 : 1)) % ids.length]); }
 },true);
 async function init() {
-  sftpSize.load();
-  try { const settings = await call('load'); sftpSize.load(settings.sftpWidth); snippets.load(settings.snippets); fontFamily=Object.hasOwn(fonts,settings.fontFamily)?settings.fontFamily:'JetBrains Mono'; $('terminal-font').value=fontFamily; profiles = Array.isArray(settings.profiles) ? settings.profiles : []; fontSize = Math.max(10,Math.min(28,settings.fontSize || 14)); $('font-size').textContent = fontSize; $('shell').value = settings.defaultShell === 'cmd' ? 'cmd' : 'powershell'; renderProfiles(); renderTabs(); }
+  sftpSize.load(); snippetsSize.load();
+  try { const settings = await call('load'); sftpSize.load(settings.sftpWidth); snippetsSize.load(settings.snippetsWidth); snippets.load(settings.snippets); fontFamily=Object.hasOwn(fonts,settings.fontFamily)?settings.fontFamily:'JetBrains Mono'; $('terminal-font').value=fontFamily; profiles = Array.isArray(settings.profiles) ? settings.profiles : []; fontSize = Math.max(10,Math.min(28,settings.fontSize || 14)); $('font-size').textContent = fontSize; $('shell').value = settings.defaultShell === 'cmd' ? 'cmd' : 'powershell'; renderProfiles(); renderTabs(); }
   catch (e) { report(e); renderProfiles(); }
   updates.start();
 }
