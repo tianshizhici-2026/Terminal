@@ -54,7 +54,10 @@ export function setupDownloadQueue({call,current,sessions,busy,render,report,com
       if(!attached(s,job,id,attempt))return;
       if(result?.paused){job.state='paused';s.queueHeld=true;}
       else if(result?.cancelled){job.state='failed';job.error='下载已取消';s.queueHeld=true;}
-      else {complete(s,job);if(result?.backup)report(new Error('下载已完成；旧目录保留在：'+result.backup));}
+      else {
+        if (result?.skipped) job.summary = job.name + ' · 跳过 ' + result.skipped + ' 项';
+        complete(s,job);
+      }
     }catch(e){if(attached(s,job,id,attempt)){job.state='failed';job.error=e.message;s.queueHeld=true;report(e);}}
     finally{busy.delete(id);if(attached(s,job,id,attempt)){render();pump(s);}}
   }

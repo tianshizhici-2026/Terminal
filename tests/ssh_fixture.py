@@ -1,8 +1,19 @@
 """Loopback-only SSH/SFTP fixture; test credentials, temporary isolated filesystem."""
-import os, socket, threading, tempfile, time, pathlib, paramiko, struct, json
+import stat, posixpath, os, socket, threading, tempfile, time, pathlib, paramiko, struct, json
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix='mist-sftp-test-'))
 KEY = paramiko.RSAKey.generate(2048)
 READ_BYTES = {}
+# Model POSIX link metadata over SFTP without requiring Windows symlink privileges.
+LINK_ROOT = '/__test_folder_links__'
+LINK_TARGET = '/__test_link_target__'
+(ROOT / LINK_ROOT[1:]).mkdir()
+(ROOT / LINK_ROOT[1:] / 'ordinary').write_bytes(b'ordinary')
+(ROOT / LINK_TARGET[1:]).mkdir()
+(ROOT / LINK_TARGET[1:] / 'content').write_bytes(b'linked')
+LINKS = {LINK_ROOT + '/local_opp': LINK_TARGET, LINK_ROOT + '/alias': LINK_TARGET,
+         LINK_ROOT + '/file': LINK_TARGET + '/content', LINK_ROOT + '/broken': '/__missing__',
+         LINK_ROOT + '/self': LINK_ROOT + '/self', LINK_TARGET + '/parent': LINK_ROOT}
+SPECIAL = LINK_ROOT + '/pipe'
 class Handle(paramiko.SFTPHandle):
     def read(self, offset, length):
         data = super().read(offset, length)
@@ -45,18 +56,28 @@ class Files(paramiko.SFTPServerInterface):
         candidate=(ROOT / path.lstrip('/')).resolve()
         if not candidate.is_relative_to(ROOT): raise OSError('outside fixture')
         return candidate
-    def canonicalize(self,path): return '/' + str(pathlib.PurePosixPath('/'+path).relative_to('/')) if path!='.' else '/'
+    def canonicalize(self,path):
+        path = posixpath.normpath('/' + path.lstrip('/'))
+        return LINKS.get(path, path)
     def list_folder(self,path):
         try:
             result=[]
             for p in self.local(path).iterdir():
                 a=paramiko.SFTPAttributes.from_stat(p.stat());a.filename=p.name;result.append(a)
+            for entry in [*LINKS, SPECIAL]:
+                if posixpath.dirname(entry) == path:
+                    a=self.lstat(entry);a.filename=posixpath.basename(entry);result.append(a)
             return result
         except OSError as e:return paramiko.SFTPServer.convert_errno(e.errno)
     def stat(self,path):
         try:return paramiko.SFTPAttributes.from_stat(self.local(path).stat())
         except OSError as e:return paramiko.SFTPServer.convert_errno(e.errno)
-    lstat=stat
+    def lstat(self,path):
+        if path in LINKS or path == SPECIAL:
+            a=paramiko.SFTPAttributes()
+            a.st_mode = (stat.S_IFIFO if path == SPECIAL else stat.S_IFLNK) | 0o777
+            return a
+        return self.stat(path)
     def open(self,path,flags,attr):
         try:
             if path == '/__test_read_counts__.json' and not flags & (os.O_WRONLY | os.O_RDWR):

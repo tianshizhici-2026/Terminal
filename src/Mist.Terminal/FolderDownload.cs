@@ -1,6 +1,8 @@
 using System.IO;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Renci.SshNet.Common;
 using System.Text.RegularExpressions;
 using Renci.SshNet;
 
@@ -8,7 +10,8 @@ namespace Mist.Terminal;
 
 internal static class FolderDownload
 {
-    private sealed record Entry(string Path, bool Directory, long Size, long Modified);
+    private sealed record Entry(string Path, bool Directory, long Size, long Modified,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Source = null);
     private sealed record Manifest(string Server, string Remote, Entry[] Entries);
     private sealed record CompletedFile(Entry Entry, string Hash);
     private sealed record SyncState(int Version, string Server, string Remote, CompletedFile[] Files);
@@ -31,30 +34,50 @@ internal static class FolderDownload
         return name;
     }
     private static void NoLinks(string path) => DownloadFiles.NoLinks(path);
-    private static Entry[] Scan(SftpClient client, string root, CancellationToken token)
+    private static Entry[] Scan(SftpClient client, string root, CancellationToken token, out int skipped)
     {
         var entries = new List<Entry>();
-        void Walk(string remote, string relative, int depth)
+        var ancestors = new HashSet<string>(StringComparer.Ordinal);
+        int skippedCount = 0, visited = 0;
+        void Walk(string remote, string relative, bool throughLink, int depth)
         {
-            if (depth > 128 || entries.Count > 100000) throw new IOException("目录过深或项目过多，请分批下载。");
+            ancestors.Add(remote);
+            if (depth > 128) throw new IOException("目录过深或项目过多，请分批下载。");
             token.ThrowIfCancellationRequested();
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in client.ListDirectory(remote).Where(x => x.Name is not "." and not "..").OrderBy(x => x.Name, StringComparer.Ordinal))
             {
                 token.ThrowIfCancellationRequested();
+                if (++visited > 100000) throw new IOException("目录项目过多，请分批下载。");
+                var target = item;
+                if (item.IsSymbolicLink)
+                {
+                    // Get resolves REALPATH before reading the target attributes.
+                    try { target = client.Get(item.FullName); }
+                    catch (SftpPathNotFoundException) { skippedCount++; continue; }
+                }
+                if ((!target.IsDirectory && !target.IsRegularFile) || (target.IsDirectory && ancestors.Contains(target.FullName)))
+                {
+                    skippedCount++;
+                    continue;
+                }
                 SafeName(item.Name);
                 if (!names.Add(item.Name)) throw new IOException("存在 Windows 无法区分的同名文件：" + item.Name);
-                if (item.IsSymbolicLink || (!item.IsDirectory && !item.IsRegularFile)) throw new IOException("目录包含链接或特殊文件，请单独处理：" + item.FullName);
                 string path = relative.Length == 0 ? item.Name : relative + "/" + item.Name;
-                entries.Add(new Entry(path, item.IsDirectory, item.IsDirectory ? 0 : item.Length, item.IsDirectory ? 0 : item.LastWriteTimeUtc.Ticks));
-                if (item.IsDirectory) Walk(remote.TrimEnd('/') + "/" + item.Name, path, depth + 1);
+                bool linked = throughLink || item.IsSymbolicLink;
+                entries.Add(new Entry(path, target.IsDirectory, target.IsDirectory ? 0 : target.Length,
+                    target.IsDirectory ? 0 : target.LastWriteTimeUtc.Ticks, linked ? target.FullName : null));
+                if (target.IsDirectory) Walk(target.FullName, path, linked, depth + 1);
             }
+            ancestors.Remove(remote);
         }
-        var attributes = client.GetAttributes(root);
-        if (attributes.IsSymbolicLink || !attributes.IsDirectory) throw new IOException("远程路径不是文件夹。");
-        Walk(root, "", 0); return entries.ToArray();
+        var folder = client.Get(root);
+        if (!folder.IsDirectory) throw new IOException("远程路径不是文件夹。");
+        Walk(folder.FullName, "", false, 0);
+        skipped = skippedCount;
+        return entries.ToArray();
     }
-    public static string? Run(SftpClient client, string server, string remote, string destination, Action<long,long> progress, CancellationToken token = default, bool overwrite = false, bool restart = false)
+    public static int Run(SftpClient client, string server, string remote, string destination, Action<long,long> progress, CancellationToken token = default, bool overwrite = false, bool restart = false)
     {
         destination = Path.GetFullPath(destination); NoLinks(destination);
         if (File.Exists(destination)) throw new IOException("目标是文件，请选择其他保存位置。");
@@ -62,7 +85,7 @@ internal static class FolderDownload
         foreach (var p in new[] {stage, info, gate, sync}) NoLinks(p);
         if (Directory.Exists(sync)) throw new IOException("下载校验记录位置已被文件夹占用，请选择其他保存位置。");
         using var ownership = new FileStream(gate, FileMode.OpenOrCreate, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
-        var manifest = new Manifest(server, remote, Scan(client, remote, token));
+        var manifest = new Manifest(server, remote, Scan(client, remote, token, out int skipped));
         string serialized = JsonSerializer.Serialize(manifest), committing = Path.Combine(stage, "commit.json"); NoLinks(committing);
         bool resumingCommit = !restart && File.Exists(committing) && File.Exists(info) && File.ReadAllText(committing) == serialized && File.ReadAllText(info) == serialized;
         if (Directory.Exists(destination) && !overwrite && !resumingCommit) throw new IOException("目标已存在，请确认合并下载，或选择其他保存位置。");
@@ -132,7 +155,7 @@ internal static class FolderDownload
             }
             if (!File.Exists(blob) || new FileInfo(blob).Length != entry.Size || savedHash == null || Hash(blob, token) != savedHash)
             {
-                ResumableDownload.Run(client, server, remote.TrimEnd('/') + "/" + entry.Path, blob, (n, _) => progress(done+n,total), token, overwrite:true);
+                ResumableDownload.Run(client, server, entry.Source ?? (remote.TrimEnd('/') + "/" + entry.Path), blob, (n, _) => progress(done+n,total), token, overwrite:true);
                 savedHash = Hash(blob, token);
                 File.WriteAllText(hashFile, savedHash);
                 File.SetLastWriteTimeUtc(blob, new DateTime(entry.Modified, DateTimeKind.Utc));
@@ -140,7 +163,7 @@ internal static class FolderDownload
             File.Move(blob, target, true); completed.Add(new(entry, savedHash!)); done += entry.Size; progress(done,total);
         }
         token.ThrowIfCancellationRequested();
-        if (!manifest.Entries.SequenceEqual(Scan(client, remote, token))) throw new IOException("下载期间远程目录已变化；未生成完成目录。");
+        if (!manifest.Entries.SequenceEqual(Scan(client, remote, token, out _))) throw new IOException("下载期间远程目录已变化；未生成完成目录。");
         var expectedPaths = manifest.Entries.Select(x => x.Path.Replace('/', Path.DirectorySeparatorChar)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         void VerifyTree(string directory)
         {
@@ -192,6 +215,6 @@ internal static class FolderDownload
             foreach (var suffix in new[] {".data", ".data.sha256", ".data.terminal.part", ".data.terminal.part.json"}) File.Delete(Path.Combine(stage,i+suffix));
         File.Delete(committing);
         Directory.Delete(stage); File.Delete(info);
-        return null;
+        return skipped;
     }
 }

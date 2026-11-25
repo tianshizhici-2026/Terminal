@@ -156,6 +156,15 @@ try
     }
     finally{source.DeleteFile(remoteFolder+"/nested/data.bin");source.DeleteFile(remoteFolder+"/zero");source.DeleteDirectory(remoteFolder+"/nested");source.DeleteDirectory(remoteFolder+"/empty");source.DeleteDirectory(remoteFolder);}
 
+    string linkedFolder = Path.Combine(folder, "linked-folder");
+    int skipped = FolderDownload.Run(source, identity, "/__test_folder_links__", linkedFolder, (_, _) => {});
+    Check(skipped == 5, $"Expected broken link, self-link, two ancestor links and pipe to be skipped; got {skipped}");
+    Check(File.ReadAllText(Path.Combine(linkedFolder, "ordinary")) == "ordinary", "Ordinary sibling missing");
+    foreach (var relative in new[] {"local_opp/content", "alias/content", "file"})
+        Check(File.ReadAllText(Path.Combine(linkedFolder, relative)) == "linked", "Linked content missing: " + relative);
+    Check(Directory.GetFileSystemEntries(linkedFolder).Length == 4, "Unexpected entries in completed folder");
+    Console.WriteLine("PASS folder links preserve names and contents, skip broken links, cycles and FIFO");
+
     IncrementalFolders.Run(source, identity, folder);
 }
 finally

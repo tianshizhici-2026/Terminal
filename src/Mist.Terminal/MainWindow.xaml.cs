@@ -282,9 +282,9 @@ public partial class MainWindow : Window
                 {
                     if (S(p, "directory") == "yes")
                     {
-                        string? backup = FolderDownload.Run(client, remote.FileIdentity, path, local,
+                        int skipped = FolderDownload.Run(client, remote.FileIdentity, path, local,
                             (done, total) => Send(new { type = "transfer", id, transferId, done, total }), cancellation.Token, overwrite, restart);
-                        return new { success = true, backup };
+                        return new { success = true, skipped };
                     }
                     else ResumableDownload.Run(client, remote.FileIdentity, path, local,
                         (done, total) => Send(new { type = "transfer", id, transferId, done, total }), cancellation.Token, overwrite, restart);
